@@ -8,20 +8,22 @@
   <license>MIT</license>
 
   <build_depend>ros_environment</build_depend>
+
   <buildtool_depend condition="$ROS_VERSION == 1">catkin</buildtool_depend>
   <buildtool_depend condition="$ROS_VERSION == 2">ament_cmake</buildtool_depend>
   <buildtool_depend condition="$ROS_VERSION == 2">ament_cmake_auto</buildtool_depend>
 
-  <depend>geometry_msgs</depend>
   <depend condition="$ROS_VERSION == 2">rclcpp</depend>
   <depend condition="$ROS_VERSION == 2">rclcpp_components</depend>
-  <depend condition="$ROS_VERSION == 2">gps_tools</depend>
   <depend condition="$ROS_VERSION == 1">roscpp</depend>
+
+  <depend>geometry_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>eigen</depend>
+  <depend>geographiclib</depend>
 
   <test_depend condition="$ROS_VERSION == 2">ament_lint_auto</test_depend>
   <test_depend condition="$ROS_VERSION == 2">ament_lint_common</test_depend>

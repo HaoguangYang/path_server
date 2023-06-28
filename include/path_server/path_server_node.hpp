@@ -96,7 +96,7 @@ class PathServerNode : public rclcpp::Node {
   float minLeftwardsOffset_ = 0., maxLeftwardsOffset_ = 0.;
 
   rclcpp::Publisher<Float32MultiArray>::SharedPtr offsetRangePub_, pathCurvaturePub_,
-      offsetDistPub_;
+      lookAheadDistPub_, offsetDistPub_;
 
   // rclcpp::Publisher<ErrorReport>::SharedPtr errPub_;
 

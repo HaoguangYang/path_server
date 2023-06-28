@@ -21,6 +21,10 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
 
+# Geographiclib installs FindGeographicLib.cmake to this non-standard location
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/share/cmake/geographiclib/")
+find_package(GeographicLib REQUIRED)
+
 if(${ROS_VERSION} EQUAL 2)
   # find dependencies
   find_package(ament_cmake_auto REQUIRED)
@@ -33,6 +37,12 @@ if(${ROS_VERSION} EQUAL 2)
     src/path_server.cpp
     src/path_server_node.cpp
   )
+
+  # linking GeographicLib as it is added with the custom cmake path
+  target_link_libraries(path_server_lib
+    ${GeographicLib_LIBRARIES}
+  )
+
   rclcpp_components_register_node(path_server_lib
     PLUGIN "path_server::PathServerNode"
     EXECUTABLE path_server_node
@@ -71,15 +81,22 @@ elseif(${ROS_VERSION} EQUAL 1)
   ## Build talker and listener
   include_directories(include ${catkin_INCLUDE_DIRS} ${Eigen_INCLUDE_DIRS})
 
-  add_executable(path_server
+  add_executable(path_server_node
     src/bezier_interpolation.cpp
     src/path_manipulation.cpp
     src/path_server_utils.cpp
     src/path_server.cpp
     src/path_server_node_ros1.cpp
   )
-  target_link_libraries(path_server ${catkin_LIBRARIES})
-  add_dependencies(path_server
+
+  target_link_libraries(path_server_node ${catkin_LIBRARIES})
+
+  # linking GeographicLib as it is added with the custom cmake path
+  target_link_libraries(path_server_node
+    ${GeographicLib_LIBRARIES}
+  )
+
+  add_dependencies(path_server_node
     ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS}
   )
 

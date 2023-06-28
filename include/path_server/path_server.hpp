@@ -19,7 +19,6 @@
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
-#include "gps_tools/conversions.h"
 #elif __has_include("ros/ros.h")
 #include "geometry_msgs/Pose.h"
 #include "geometry_msgs/PoseStamped.h"
@@ -27,7 +26,6 @@
 #include "nav_msgs/Path.h"
 #include "ros/ros.h"
 #include "std_msgs/Header.h"
-#include "path_server/utm_ll_conversions.h"
 #endif
 
 #include "bezier_interpolation.hpp"
@@ -40,6 +38,8 @@
 #else
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #endif
+
+#include "GeographicLib/UTMUPS.hpp"
 
 using namespace std::chrono_literals;
 using namespace std::placeholders;
@@ -70,12 +70,13 @@ class PathServer {
   explicit PathServer(rclcpp::Node* node, tf2_ros::Buffer* tfBuffer, const std::string& targetFrame,
                       const std::string& utmFrame, const std::string& localEnuFrame,
                       const std::string& mapFrame, const std::string& odomFrame,
-                      const std::string& onNewPath);
+                      const std::string& onNewPath, const double& utmScale = 1.0);
 #elif defined ROSCPP_ROS_H
   explicit PathServer(ros::NodeHandle* node, tf2_ros::Buffer* tfBuffer,
                       const std::string& targetFrame, const std::string& utmFrame,
                       const std::string& localEnuFrame, const std::string& mapFrame,
-                      const std::string& odomFrame, const std::string& onNewPath);
+                      const std::string& odomFrame, const std::string& onNewPath,
+                      const double& utmScale = 1.0);
 #endif
 
   ~PathServer() = default;
@@ -121,7 +122,7 @@ class PathServer {
 #ifdef RCLCPP__RCLCPP_HPP_
   void updateStaticFrameTfAvail();
 #elif defined ROSCPP_ROS_H
-  void updateStaticFrameTfAvail(const ros::TimerEvent& event);
+  void updateStaticFrameTfAvail(const ros::TimerEvent&);
 #endif
 
   void offsetPath(const float& from, const float& to, const float& leftingAmount);
@@ -156,37 +157,42 @@ class PathServer {
     return out;
   };
 
+  std::vector<float> getFrontLookAheadArray() const {
+    return frontPath_.look_ahead;
+  }
+
   std::vector<float> getFrontCurvature() const {
-    return {frontPath_.curvature.begin(), frontPath_.curvature.end()};
+    return {frontPath_.curvature.cbegin(), frontPath_.curvature.cend()};
   }
 
   std::vector<float> getRearCurvature() const {
-    return {rearPath_.curvature.begin(), rearPath_.curvature.end()};
+    return {rearPath_.curvature.cbegin(), rearPath_.curvature.cend()};
   }
 
   std::vector<float> getFrontOffsetArray() const {
-    return {frontPath_.offset_left.begin(), frontPath_.offset_left.end()};
+    return {frontPath_.offset_left.cbegin(), frontPath_.offset_left.cend()};
   }
 
   std::vector<float> getRearOffsetArray() const {
-    return {rearPath_.offset_left.begin(), rearPath_.offset_left.end()};
+    return {rearPath_.offset_left.cbegin(), rearPath_.offset_left.cend()};
   }
 
-  float getCurrentOffset() const { return frontPath_.offset_left.front(); }
+  const float& getCurrentOffset() const { return frontPath_.offset_left.front(); }
 
-  int getCurrentInd() const { return currentInd_; };
+  const int& getCurrentInd() const { return currentInd_; };
 
-  bool isClosedPath() const { return isClosedPath_; };
+  const bool& isClosedPath() const { return isClosedPath_; };
 
   double getPathCumulativeDist() const {
-    return isClosedPath_ ? *(milestone_.begin()) : *(milestone_.end() - 1);
+    return isClosedPath_ ? milestone_.front() : milestone_.back();
   };
 
-  PoseStamped getClosestPose() const { return frontPath_.offset_poses[0]; };
+  const PoseStamped& getClosestPose() const { return frontPath_.offset_poses[0]; };
 
   std::tuple<double, double, double> safeVector(const PoseStamped& pose1,
                                                 const PoseStamped& pose2) const;
 
+  // observe pose2 from pose1
   Pose safeProjection(const PoseStamped& pose1, const PoseStamped& pose2) const;
 
   /**
@@ -233,17 +239,20 @@ class PathServer {
 
  private:
   typedef struct PathCandidate {
-    Header header;
+    const std::string frame_id;
     unsigned long version;
     std::vector<PoseStamped> poses;
+
+    PathCandidate(const std::string& frame_id) : frame_id(frame_id) {}
   } PathCandidate;
 
   typedef struct SlidingPathWithProperty {
     Header header;
     std::vector<PoseStamped> poses;
-    std::vector<PoseStamped> offset_poses;
+    std::vector<float> look_ahead;
     std::deque<float> curvature;
     std::deque<float> offset_left;
+    std::vector<PoseStamped> offset_poses;
   } SlidingPathWithProperty;
 
   /**
@@ -290,40 +299,21 @@ class PathServer {
   std::vector<T> getActiveSeg(const std::vector<T>& source, const int& indStart, const int& indEnd,
                               const bool& isClosed) const;
 
+  // a power tool to select the first member within a list that has a user-defined property
   template <typename Lambda, typename T, typename... Args>
-  T& findFirstThat(const std::initializer_list<T>& candidates, const Lambda&& method,
-                   const Args&... args) const {
+  T findFirstThat(const std::initializer_list<T>& candidates, const Lambda&& method,
+                  const Args&... args) const {
     for (const auto& item : candidates) {
       if (method(item, args...)) {
-        return const_cast<T&>(item);
+        return item;
       }
     }
     throw std::runtime_error("None of the provided candidates meet the conditions.");
   }
 
   template <typename T>
-  T& firstMatchedFrame(const std::initializer_list<T>& candidates,
-                       const std::string& toFind) const {
-    return findFirstThat(
-        candidates,
-        [](const T& item, const std::string& toFind_) { return item.header.frame_id == toFind_; },
-        toFind);
-  }
-
-  template <typename T>
-  T& firstTransformable(const std::initializer_list<T>& candidates,
-                        const std::string& toFrame) const {
-    return findFirstThat(
-        candidates,
-        [this](const T& item, const std::string& toFrame_) {
-          return this->safeCanTransform(toFrame_, item.header.frame_id, tf2::TimePointZero);
-        },
-        toFrame);
-  }
-
-  template <typename T>
-  T& firstAvailable(const std::initializer_list<T>& candidates) const {
-    return findFirstThat(candidates, [](const T& item) { return (item.size() > 0); });
+  T firstAvailable(const std::initializer_list<T>& candidates) const {
+    return findFirstThat(candidates, [](const T& item) { return (item->size() > 0); });
   }
 
   static Path makePath(SlidingPathWithProperty& in) {
@@ -347,13 +337,20 @@ class PathServer {
 
   void syncPathCandidate(const std::initializer_list<PathCandidate>& in, PathCandidate& out) {
     if (out.version >= latestPathVer_) return;
-    if (!safeCanTransform(out.header.frame_id, targetFrame_, tf2::TimePointZero)) return;
+    if (!safeCanTransform(out.frame_id, targetFrame_, tf2::TimePointZero)) return;
     std::vector<PoseStamped> tmpPoses;
-    Header tmpHeader;
-    for (auto it : in) {
+    std::string adoptedFrame;
+    for (const auto& it : in) {
       if (it.version == latestPathVer_) {
-        tmpPoses = safeTransformPoses(out.header.frame_id, it.poses);
-        tmpHeader = it.header;
+        tmpPoses = safeTransformPoses(out.frame_id, it.poses);
+        // Handle UTM -> local cartesian scaling (last bit of at most 0.1% error)
+        if (it.frame_id == utmCoords_.frame_id && it.frame_id != out.frame_id){
+          for (auto& p : tmpPoses){
+            p.pose.position.x /= utmScale_;
+            p.pose.position.y /= utmScale_;
+          }
+        }
+        adoptedFrame = it.frame_id;
       }
       if (!tmpPoses.size()) continue;
       break;
@@ -361,14 +358,13 @@ class PathServer {
     // got a valid transform
     if (tmpPoses.size()) {
       out.poses = tmpPoses;
-      out.header.stamp = tmpHeader.stamp;
       out.version = latestPathVer_;
 #ifdef RCLCPP_DEBUG
       RCLCPP_DEBUG(node_->get_logger(), "Synchronized path representation %s from %s.",
-                   out.header.frame_id.c_str(), tmpHeader.frame_id.c_str());
+                   out.frame_id.c_str(), adoptedFrame.c_str());
 #elif defined ROS_DEBUG
       ROS_DEBUG("Synchronized path representation %s from %s.",
-                   out.header.frame_id.c_str(), tmpHeader.frame_id.c_str());
+                   out.frame_id.c_str(), adoptedFrame.c_str());
 #endif
     }
   }
@@ -438,19 +434,10 @@ class PathServer {
    */
   void updateLookAheadAndBehindInds();
 
-  static unsigned long getTimestamp(const Header& hdr) {
-  #ifdef RCLCPP__RCLCPP_HPP_
-    return static_cast<unsigned long>(hdr.stamp.sec) * 1000000000UL + hdr.stamp.nanosec;
-  #elif defined ROSCPP_ROS_H
-    return static_cast<unsigned long>(hdr.stamp.sec) * 1000000000UL + hdr.stamp.nsec;
-  #endif
-  }
-
   bool safeCanTransform(const std::string& to, const std::string& from,
                         const tf2::TimePoint& time = tf2::TimePointZero) const {
-    bool exist = this->tfBuffer_->_frameExists(to) && tfBuffer_->_frameExists(from);
-    if (!exist) return exist;
-    return (exist && this->tfBuffer_->canTransform(to, from, time));
+    if (!(this->tfBuffer_->_frameExists(to) && tfBuffer_->_frameExists(from))) return false;
+    return (this->tfBuffer_->canTransform(to, from, time));
   }
 
 #ifdef RCLCPP__RCLCPP_HPP_
@@ -465,26 +452,30 @@ class PathServer {
    */
   std::string pathFrame_, targetFrame_;
 
+  std::string onNewPath_;
+  double lookAheadDist_, lookBehindDist_;
+  bool isClosedPath_, doInterp_;
+  double interpStep_;
+  bool interpretYaw_, prepareActivePathSeg_;
+
   /**
    * @brief static or quasi-static reference frames that we will check.
    * Standard frame definitions:
    * earth: path file is in latitude, longitude, [optional - NED haeding (deg)] format.
    *        This is pre-transformed to utm before further transformation.
    * utm:   path file is in easting, northing, [optional - ENU heading (rad)] format.
-   *        Standard tf2 transformation will be applied.
+   *        Standard tf2 transformation will be applied. UTM coordinates involve a scaling factor
+   *        related to projection, and is either multiplied-in by the remainder of the stack or not.
+   *        A parameter is set to control the application of the scaling factor.
    * local_enu: path file is in easting, northing, [optional - ENU heading (rad)] format.
    *        Standard tf2 transformation will be applied.
    * map:   path file is absolute x, y, [optional right-handed heading (rad)] format
    *        relative to the map frame. Standard tf2 transformation will be applied.
    * base_link: rigidly attached to the robot, facing front (X), left (Y), up (Z).
    */
-  PathCandidate utmCoords_, localEnuCoords_, odomCoords_, mapCoords_;
-
-  std::string onNewPath_;
-  double lookAheadDist_, lookBehindDist_;
-  bool isClosedPath_, doInterp_;
-  double interpStep_;
-  bool interpretYaw_, prepareActivePathSeg_;
+  PathCandidate utmCoords_, localEnuCoords_, mapCoords_, odomCoords_;
+  bool utmScaled_ = false;
+  double utmScale_ = 1.0;
 
   unsigned long latestPathVer_ = 0;
   std::vector<double> milestone_;
@@ -506,10 +497,7 @@ class PathServer {
   // offset control points
   bool doOffset_ = false;
   float pathOffsetEaseInDist_ = 50.0;
-  double pathOffsetOdomMark_ = 0.0;
-  double pathOffsetOdomSet_ = 0.0;
-  double pathOffsetOdomLift_ = 0.0;
-  double pathOffsetOdomClear_ = 0.0;
+  double pathOffsetOdomMark_, pathOffsetOdomSet_, pathOffsetOdomLift_, pathOffsetOdomClear_;
   // offset value when the command is received, and the commanded value. Used to calculate ease-in.
   float existingOffset_ = 0.0;
   float pathOffsetToLeft_ = 0.0;

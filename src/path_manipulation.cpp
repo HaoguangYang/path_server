@@ -21,7 +21,7 @@ void PathServer::offsetPath(const float& from, const float& to, const float& lef
 
 void PathServer::appendPoses(std::vector<PoseStamped>& target,
                              const std::vector<PoseStamped>& input) {
-  target.insert(target.end(), input.begin(), input.end());
+  target.insert(target.end(), input.cbegin(), input.cend());
   // re-calculate frenet-frame distances and curvature
   initFrenetXDistance();
   initCurvature();

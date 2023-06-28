@@ -17,7 +17,8 @@ double PathServer::getFrenetXDistance(const int& ind1, const int& ind2) {
      * Hence, we allow the indices to exceed poses.size(), indicating running along
      * the specified direction.
      * */
-    int laps = ind2 / static_cast<int>(milestone_.size()) - ind1 / static_cast<int>(milestone_.size());
+    int laps =
+        ind2 / static_cast<int>(milestone_.size()) - ind1 / static_cast<int>(milestone_.size());
     int rem1 = ind1 % static_cast<int>(milestone_.size());
     int rem2 = ind2 % static_cast<int>(milestone_.size());
     if (rem1 < 0) {
@@ -38,6 +39,7 @@ int PathServer::findClosestInd(const std::vector<PoseStamped>& poses, const int&
   double minDistance = DBL_MAX;
   const PoseStamped self = [&]() {
     PoseStamped ret;
+    //ret.header.stamp = node_->now();  // you shouldn't do this.
     ret.header.frame_id = targetFrame_;
     ret.pose.position.x = 0.0;
     ret.pose.position.y = 0.0;
@@ -155,7 +157,8 @@ double PathServer::safeGetDistance(const PoseStamped& pose1, const PoseStamped& 
                    std::get<2>(vect) * std::get<2>(vect));
 }
 
-tf2::Quaternion PathServer::safeGetOrientation(const PoseStamped& pose1, const PoseStamped& pose2) const {
+tf2::Quaternion PathServer::safeGetOrientation(const PoseStamped& pose1,
+                                               const PoseStamped& pose2) const {
   tf2::Quaternion q;
   auto vect = safeVector(pose1, pose2);
   if (isnan(std::get<0>(vect)) || isnan(std::get<1>(vect)) || isnan(std::get<2>(vect))) {

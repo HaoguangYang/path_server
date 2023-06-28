@@ -9,12 +9,14 @@ namespace path_server {
 PathServer::PathServer(rclcpp::Node* node, tf2_ros::Buffer* tfBuffer,
                        const std::string& targetFrame, const std::string& utmFrame,
                        const std::string& localEnuFrame, const std::string& mapFrame,
-                       const std::string& odomFrame, const std::string& onNewPath)
+                       const std::string& odomFrame, const std::string& onNewPath,
+                       const double& utmScale)
 #elif defined ROSCPP_ROS_H
 PathServer::PathServer(ros::NodeHandle* node, tf2_ros::Buffer* tfBuffer,
                        const std::string& targetFrame, const std::string& utmFrame,
                        const std::string& localEnuFrame, const std::string& mapFrame,
-                       const std::string& odomFrame, const std::string& onNewPath)
+                       const std::string& odomFrame, const std::string& onNewPath,
+                       const double& utmScale)
 #endif
     : node_(node),
       tfBuffer_(tfBuffer),
@@ -27,14 +29,19 @@ PathServer::PathServer(ros::NodeHandle* node, tf2_ros::Buffer* tfBuffer,
       doInterp_(true),
       interpStep_(1.0),
       interpretYaw_(true),
-      prepareActivePathSeg_(true) {
-  // assign header frame ids for path representations
-  utmCoords_.header.frame_id = utmFrame;
-  localEnuCoords_.header.frame_id = localEnuFrame;
-  mapCoords_.header.frame_id = mapFrame;
-  odomCoords_.header.frame_id = odomFrame;
+      prepareActivePathSeg_(true),
+      // assign header frame ids for path representations
+      utmCoords_(utmFrame),
+      localEnuCoords_(localEnuFrame),
+      mapCoords_(mapFrame),
+      odomCoords_(odomFrame),
+      utmScale_(utmScale) {
   frontPath_.header.frame_id = targetFrame_;
   rearPath_.header.frame_id = targetFrame_;
+  pathOffsetOdomMark_ = -lookBehindDist_;
+  pathOffsetOdomSet_ = -lookBehindDist_;
+  pathOffsetOdomLift_ = -lookBehindDist_;
+  pathOffsetOdomClear_ = -lookBehindDist_;
 }
 
 template <typename T, typename Lambda1, typename Lambda2>
@@ -104,11 +111,11 @@ std::vector<PoseStamped> PathServer::packPathPoses(const std::vector<T>& coords,
       double* ptr = &yawOut[0];
       Map<VectorXd> angles(ptr, yawOut.size());
       // post-processing: no difference should exceed M_PI
-      const double TWO_PI = M_PI + M_PI;
+      const double TWO_PI = M_PIf64 + M_PIf64;
       for (int n = 1; n < angles.size(); n++) {
-        if (angles(n) - angles(n - 1) > M_PI)
+        if (angles(n) - angles(n - 1) > M_PIf64)
           angles(n) -= TWO_PI;
-        else if (angles(n) - angles(n - 1) < -M_PI)
+        else if (angles(n) - angles(n - 1) < -M_PIf64)
           angles(n) += TWO_PI;
       }
 
@@ -147,7 +154,7 @@ std::vector<PoseStamped> PathServer::packPathPoses(const std::vector<T>& coords,
           it->pose.orientation = (it - 1)->pose.orientation;
         } else {
           // close the loop
-          tf2::Quaternion q = safeGetOrientation(*(it), *(out.begin()));
+          tf2::Quaternion q = safeGetOrientation(*(it), out.front());
           it->pose.orientation = tf2::toMsg(q);
         }
         break;
@@ -189,18 +196,18 @@ std::vector<T> PathServer::getActiveSeg(const std::vector<T>& source, const int&
   if (indStart < indEnd) {
     // going positive direction
     if (ind1 > ind2) {
-      target = {source.begin() + ind1, source.end()};
-      target.insert(target.end(), source.begin(), source.begin() + 1 + ind2);
+      target = {source.cbegin() + ind1, source.cend()};
+      target.insert(target.end(), source.cbegin(), source.cbegin() + 1 + ind2);
     } else {
-      target = {source.begin() + ind1, source.begin() + 1 + ind2};
+      target = {source.cbegin() + ind1, source.cbegin() + 1 + ind2};
     }
   } else {
     // going negative direction
     if (ind1 < ind2) {
-      target = {source.rend() - 1 - ind1, source.rend()};
-      target.insert(target.end(), source.rbegin(), source.rend() - ind2);
+      target = {source.crend() - 1 - ind1, source.crend()};
+      target.insert(target.end(), source.crbegin(), source.crend() - ind2);
     } else {
-      target = {source.rend() - 1 - ind1, source.rend() - ind2};
+      target = {source.crend() - 1 - ind1, source.crend() - ind2};
     }
   }
   return target;
@@ -208,18 +215,22 @@ std::vector<T> PathServer::getActiveSeg(const std::vector<T>& source, const int&
 
 void PathServer::registerPath(const std::string& pathFrame,
                               const std::vector<std::vector<double>>& rawPath) {
-  PathCandidate& which = utmCoords_;
+  PathCandidate* which = &utmCoords_;
   std::vector<PoseStamped> regPath;
   // isolate this variable because it requires re-initialization.
   if (pathFrame == "earth") {
     // First to UTM
     regPath = packPathPoses(
-        rawPath, utmCoords_.header.frame_id,
+        rawPath, utmCoords_.frame_id,
         // Lat/Long to UTM lambda function
-        [](const std::vector<double>& latlon) {
+        [&](const std::vector<double>& latlon) {
           double utmE, utmN;
-          std::string utmZoneTmp;
-          gps_tools::LLtoUTM(latlon[0], latlon[1], utmN, utmE, utmZoneTmp);
+          int utmZoneId;
+          bool northp_tmp;
+          double gamma_tmp;
+          double utmScale_tmp;
+          GeographicLib::UTMUPS::Forward(latlon[0], latlon[1], utmZoneId, northp_tmp, utmE, utmN,
+                                         gamma_tmp, utmScale_tmp);
           // std::cout << utmE << " " << utmN << std::endl;
           return std::vector<double>{utmE, utmN};
         },
@@ -227,7 +238,10 @@ void PathServer::registerPath(const std::string& pathFrame,
         [](const double& heading) { return (90.0 - heading) * M_PI / 180.0; });
   } else {
     try {
-      which = firstMatchedFrame({utmCoords_, mapCoords_, localEnuCoords_}, pathFrame);
+      which = findFirstThat(
+          {&utmCoords_, &mapCoords_, &localEnuCoords_},
+          [](const auto& item, const std::string& toFind_) { return item->frame_id == toFind_; },
+          pathFrame);
       // directly populate utm, map, or local_enu coords
       regPath = packPathPoses(rawPath, pathFrame);
     } catch (std::runtime_error& e) {
@@ -246,8 +260,12 @@ void PathServer::registerPath(const std::string& pathFrame,
         // most likely this path is w.r.t. some perceived stationary object.
         // tries in the precedence order of map -> local_enu -> utm -> odom
         try {
-          which =
-              firstTransformable({mapCoords_, localEnuCoords_, utmCoords_, odomCoords_}, pathFrame);
+          which = findFirstThat(
+              {&mapCoords_, &localEnuCoords_, &utmCoords_, &odomCoords_},
+              [this](const auto& item, const std::string& toFrame_) {
+                return this->safeCanTransform(toFrame_, item->frame_id, tf2::TimePointZero);
+              },
+              pathFrame);
         } catch (std::runtime_error& e) {
           // we got nothing this round. wait 0.1s and try again
 #ifdef RCLCPP_INFO_THROTTLE
@@ -269,30 +287,29 @@ void PathServer::registerPath(const std::string& pathFrame,
 #endif
           throw std::runtime_error("Path Registration Failed.");
         }
-        regPath = safeTransformPoses(which.header.frame_id, tmp_path.poses);
+        regPath = safeTransformPoses(which->frame_id, tmp_path.poses);
         // we got a valid output.
         if (regPath.size()) break;
       }
     }
   }
   // initial path
-  if (!which.poses.size())
-    replacePoses(which.poses, regPath);
+  if (!which->poses.size())
+    replacePoses(which->poses, regPath);
   else if (onNewPath_ == "append")
-    appendPoses(which.poses, regPath);
+    appendPoses(which->poses, regPath);
   else if (onNewPath_ == "replace")
-    replacePoses(which.poses, regPath);
+    replacePoses(which->poses, regPath);
   // else if (onNewPath_ == "intersect")
   //   intersectPoses(which.poses, regPath);
   //  TODO: more path insertion approaches
-  //  give it a new time
+  //  give it a new time stamp
 #ifdef RCLCPP__RCLCPP_HPP_
-  which.header.stamp = node_->now();
+  which->version = static_cast<unsigned long>(node_->now().nanoseconds());
 #elif defined ROSCPP_ROS_H
-  which.header.stamp = ros::Time::now();
+  which->version = ros::Time::now().toNSec();
 #endif
-  which.version = getTimestamp(which.header);
-  latestPathVer_ = which.version;
+  latestPathVer_ = which->version;
 #ifdef RCLCPP__RCLCPP_HPP_
   staticFrameChkTimer_ =
       node_->create_wall_timer(1.0s, std::bind(&PathServer::updateStaticFrameTfAvail, this));
@@ -309,13 +326,13 @@ bool PathServer::initialize() {
   std::vector<PoseStamped> transformedPoses;
   // try each representation of the path until the any one of them transforms to the target pose.
   // find the first one that is both available and transformable.
-  PathCandidate& which = utmCoords_;
+  PathCandidate* which = &utmCoords_;
   try {
     which = findFirstThat(
-        {utmCoords_, localEnuCoords_, mapCoords_, odomCoords_},
+        {&utmCoords_, &localEnuCoords_, &mapCoords_, &odomCoords_},
         [&](const auto& item, const std::string& toFrame) {
-          if (getTimestamp(item.header) < latestPathVer_ || item.poses.size() <= 0) return false;
-          return (safeCanTransform(toFrame, item.header.frame_id, tf2::TimePointZero));
+          if (item->version < latestPathVer_ || item->poses.size() <= 0) return false;
+          return (safeCanTransform(toFrame, item->frame_id, tf2::TimePointZero));
         },
         targetFrame_);
   } catch (std::runtime_error& e) {
@@ -332,7 +349,7 @@ bool PathServer::initialize() {
 #endif
     return false;
   }
-  transformedPoses = safeTransformPoses(targetFrame_, which.poses);
+  transformedPoses = safeTransformPoses(targetFrame_, which->poses);
   // initializing
   currentInd_ = findClosestInd(transformedPoses, 0, false);
 
@@ -345,10 +362,10 @@ bool PathServer::initialize() {
 }
 
 void PathServer::initFrenetXDistance() {
-  std::vector<PoseStamped>& which = utmCoords_.poses;
+  std::vector<PoseStamped>* which = &(utmCoords_.poses);
   try {
     which = firstAvailable(
-        {utmCoords_.poses, localEnuCoords_.poses, mapCoords_.poses, odomCoords_.poses});
+        {&(utmCoords_.poses), &(localEnuCoords_.poses), &(mapCoords_.poses), &(odomCoords_.poses)});
   } catch (std::runtime_error& e) {
     // paths not initialized
     // TODO: handle exception
@@ -356,25 +373,25 @@ void PathServer::initFrenetXDistance() {
   }
   // TODO: if frenet cumulative distance is already the latest version, skip re-initialization.
   milestone_.clear();
-  milestone_.reserve(which.size());
+  milestone_.reserve(which->size());
   milestone_.emplace_back(0.0);
-  for (auto it = which.cbegin(); it < which.cend() - 1; it++) {
+  for (auto it = which->cbegin(); it < which->cend() - 1; it++) {
     // std::cout << milestone_.back() << std::endl;
     //  get distance between this and next poses.
     milestone_.emplace_back(milestone_.back() + safeGetDistance(*it, *(it + 1)));
   }
   if (isClosedPath_) {
-    milestone_[0] = (milestone_.back() + safeGetDistance(which.back(), which.front()));
+    milestone_[0] = (milestone_.back() + safeGetDistance(which->back(), which->front()));
   }
   // verify
   if (milestone_[0] < 0) milestone_.clear();
 }
 
 void PathServer::initCurvature() {
-  std::vector<PoseStamped>& which = utmCoords_.poses;
+  std::vector<PoseStamped>* which = &(utmCoords_.poses);
   try {
     which = firstAvailable(
-        {utmCoords_.poses, localEnuCoords_.poses, mapCoords_.poses, odomCoords_.poses});
+        {&(utmCoords_.poses), &(localEnuCoords_.poses), &(mapCoords_.poses), &(odomCoords_.poses)});
   } catch (std::runtime_error& e) {
     // paths not initialized
     // TODO: handle exception
@@ -382,15 +399,15 @@ void PathServer::initCurvature() {
   }
   // TODO: if curvature is already the latest version, skip re-initialization.
   curvature_.clear();
-  curvature_.reserve(which.size());
-  for (auto it = which.cbegin(); it < which.cend() - 2; it++) {
+  curvature_.reserve(which->size());
+  for (auto it = which->cbegin(); it < which->cend() - 2; it++) {
     // get curvature at this point.
     curvature_.emplace_back(mengerCurvature(*it, *(it + 1), *(it + 2)));
   }
   // std::cout << curvature_.back() << std::endl;
   if (isClosedPath_) {
-    curvature_.emplace_back(mengerCurvature(*(which.cend() - 2), which.back(), which.front()));
-    curvature_.emplace_back(mengerCurvature(which.back(), which.front(), *(which.cbegin() + 1)));
+    curvature_.emplace_back(mengerCurvature(*(which->cend() - 2), which->back(), which->front()));
+    curvature_.emplace_back(mengerCurvature(which->back(), which->front(), *(which->cbegin() + 1)));
   } else {
     curvature_.emplace_back(curvature_.back());
     curvature_.emplace_back(0.0);
@@ -456,7 +473,7 @@ void PathServer::updateLookAheadAndBehindInds() {
 #ifdef RCLCPP__RCLCPP_HPP_
 void PathServer::updateStaticFrameTfAvail()
 #elif defined ROSCPP_ROS_H
-void PathServer::updateStaticFrameTfAvail(const ros::TimerEvent& event)
+void PathServer::updateStaticFrameTfAvail(const ros::TimerEvent&)
 #endif
 {
   // if has a static frame but its path representation does not exist, create one.
@@ -468,6 +485,9 @@ void PathServer::updateStaticFrameTfAvail(const ros::TimerEvent& event)
   // odom frame coordinates will NOT propagate outwards, but will ONLY propages
   // inwards (convert from X to odom frame), since it is NOT a strictly static frame.
   // always update odom coords copy because odom frame can drift significantly.
+  // TODO: this is probably not the best resolution for a drifty odom --
+  // obtain the tf from whatever frame to odom frame, and express self pose in odom frame
+  // to obtain the distance from self to path in fixed frame.
   odomCoords_.version = 0;
   syncPathCandidate({utmCoords_, localEnuCoords_, mapCoords_}, odomCoords_);
 }
@@ -481,10 +501,17 @@ bool PathServer::updateStep() {
     return false;
   }
   // std::vector<PoseStamped> *which;
-  PathCandidate& which = utmCoords_;
+  PathCandidate* which = &localEnuCoords_;
   try {
-    which =
-        firstTransformable({utmCoords_, localEnuCoords_, mapCoords_, odomCoords_}, targetFrame_);
+    // which =
+    //     firstTransformable({odomCoords_, localEnuCoords_, utmCoords_, mapCoords_}, targetFrame_);
+    which = findFirstThat(
+        {&utmCoords_, &localEnuCoords_, &mapCoords_, &odomCoords_},
+        [this](PathCandidate* item, const std::string& toFrame_) {
+          return this->safeCanTransform(toFrame_, item->frame_id, tf2::TimePointZero) &&
+                 item->poses.size();
+        },
+        targetFrame_);
   } catch (std::runtime_error& e) {
 #ifdef RCLCPP_ERROR_THROTTLE
     RCLCPP_ERROR_THROTTLE(node_->get_logger(), *(node_->get_clock()), 1000,
@@ -497,7 +524,7 @@ bool PathServer::updateStep() {
   }
   // start from the current index,
   // and determine when to increment the current index.
-  int newClosestInd = findClosestInd(which.poses, currentInd_, true, isClosedPath_);
+  int newClosestInd = findClosestInd(which->poses, currentInd_, true, isClosedPath_);
   if (newClosestInd < 0) {
     // TODO: Find Closest Index failed. clear and return empty path.
     return false;
@@ -513,20 +540,20 @@ bool PathServer::updateStep() {
 #endif
     frontPath_.header.frame_id = targetFrame_;
     frontPath_.poses =
-        safeTransformPoses(targetFrame_, std::vector<PoseStamped>{which.poses[currentInd_]});
-    frontPath_.offset_poses = frontPath_.poses;
+        safeTransformPoses(targetFrame_, std::vector<PoseStamped>{which->poses[currentInd_]});
+    frontPath_.look_ahead = {static_cast<float>(frontPath_.poses[0].pose.position.x)};
     frontPath_.offset_left = {0.};
     frontPath_.curvature = {curvature_[currentInd_]};
+    frontPath_.offset_poses = frontPath_.poses;
     rearPath_ = frontPath_;
     return true;
   }
 
-  /* distance to trialInd = trialDist.
-   * trialInd is the index of point that is closest
-   * to self from curInd and on.
-   * */
+  /* distance to trialInd = trialDist, where
+   * trialInd is the index of point that is closest to self from curInd and on.
+   */
   int delta = newClosestInd - currentInd_;
-  const int half = which.poses.size() / 2;
+  const int half = which->poses.size() / 2;
   if (delta < -half) {
     if (!isClosedPath_) {
 #ifdef RCLCPP_FATAL
@@ -536,7 +563,7 @@ bool PathServer::updateStep() {
 #endif
     } else {
       lapCount_++;
-      delta += which.poses.size();
+      delta += which->poses.size();
     }
   } else if (delta > half) {
     // We are heading the WRONG direction
@@ -553,7 +580,7 @@ bool PathServer::updateStep() {
 #endif
     } else {
       lapCount_--;
-      delta -= which.poses.size();
+      delta -= which->poses.size();
     }
   }
 
@@ -574,7 +601,7 @@ bool PathServer::updateStep() {
   frontPath_.header.frame_id = targetFrame_;
   // update active path segments from stored path representations.
   frontPath_.poses = safeTransformPoses(
-      targetFrame_, getActiveSeg(which.poses, currentInd_, lookAheadInd_, isClosedPath_));
+      targetFrame_, getActiveSeg(which->poses, currentInd_, lookAheadInd_, isClosedPath_));
 #ifdef RCLCPP__RCLCPP_HPP_
   rearPath_.header.stamp = node_->now();
 #elif defined ROSCPP_ROS_H
@@ -582,16 +609,30 @@ bool PathServer::updateStep() {
 #endif
   rearPath_.header.frame_id = targetFrame_;
   rearPath_.poses = safeTransformPoses(
-      targetFrame_, getActiveSeg(which.poses, currentInd_, lookBehindInd_, isClosedPath_));
-  frontPath_.offset_poses = frontPath_.poses;
-  rearPath_.offset_poses = rearPath_.poses;
+      targetFrame_, getActiveSeg(which->poses, currentInd_, lookBehindInd_, isClosedPath_));
+
+  // look-ahead distances
+  auto laDist_tmp = getActiveSeg(milestone_, currentInd_, lookAheadInd_, isClosedPath_);
+  std::transform(laDist_tmp.crbegin(), laDist_tmp.crend(), laDist_tmp.rbegin(),
+                  [&laDist_tmp](const auto& v){ return v - laDist_tmp.front(); });
+  if (isClosedPath_){
+    std::transform(laDist_tmp.cbegin(), laDist_tmp.cend(), laDist_tmp.begin(),
+                    [&](const auto& v){ return (v < 0.) ? v + milestone_.front() : v; });
+  }
+  frontPath_.look_ahead.reserve(laDist_tmp.size());
+  std::transform(laDist_tmp.cbegin(), laDist_tmp.cend(), frontPath_.look_ahead.begin(),
+                  [&](const auto& v){
+                    return static_cast<float>(v + frontPath_.poses[0].pose.position.x);
+                  });
+  // TODO: rear path look-ahead distances are not populated.
 
   // Transform-invariant fields
   // update curvature
   // service rear curvature array with index delta
   // moving forward, feed rear curvature with the closest front curvature
   for (int n = 0; n < delta; n++) {
-    rearPath_.curvature.push_front(frontPath_.curvature.size() ? frontPath_.curvature.front() : 0.);
+    rearPath_.curvature.emplace_front(frontPath_.curvature.size() ? frontPath_.curvature.front()
+                                                                  : 0.);
     if (frontPath_.curvature.size() > 1) frontPath_.curvature.pop_front();
   }
   // moving backward, drop the closest rear curvature
@@ -599,17 +640,17 @@ bool PathServer::updateStep() {
     rearPath_.curvature.pop_front();
   }
   // resize rear curvature to make alignment
-  rearPath_.curvature.resize(rearPath_.offset_poses.size(),
+  rearPath_.curvature.resize(rearPath_.poses.size(),
                              rearPath_.curvature.size() ? rearPath_.curvature.back() : 0.);
   // service front curvature array
   auto curv_tmp = getActiveSeg(curvature_, currentInd_, lookAheadInd_, isClosedPath_);
-  frontPath_.curvature = {curv_tmp.begin(), curv_tmp.end()};
+  frontPath_.curvature = {curv_tmp.cbegin(), curv_tmp.cend()};
 
   // service rear offset array with index delta
   // moving forward, feed rear offset with the closest front offset
   for (int n = 0; n < delta; n++) {
-    rearPath_.offset_left.push_front(frontPath_.offset_left.size() ? frontPath_.offset_left.front()
-                                                                   : 0.);
+    rearPath_.offset_left.emplace_front(
+        frontPath_.offset_left.size() ? frontPath_.offset_left.front() : 0.);
     if (frontPath_.offset_left.size() > 1) frontPath_.offset_left.pop_front();
   }
   // moving backward, drop the closest rear offset
@@ -617,9 +658,26 @@ bool PathServer::updateStep() {
     rearPath_.offset_left.pop_front();
   }
   // resize rear offset to make alignment
-  rearPath_.offset_left.resize(rearPath_.offset_poses.size(),
+  rearPath_.offset_left.resize(rearPath_.poses.size(),
                                rearPath_.offset_left.size() ? rearPath_.offset_left.back() : 0.);
-  // service front offset array
+
+  frontPath_.offset_poses = frontPath_.poses;
+  rearPath_.offset_poses = rearPath_.poses;
+
+  // service front offset array and pose array
+  auto pose_offset_fcn = [&](const float& offset, const PoseStamped& pose) {
+                     PoseStamped ret = pose;
+                     // offset pose to its left by offsetArray[i]. Use quaternion of the pose.
+                     tf2::Quaternion q;
+                     tf2::fromMsg(pose.pose.orientation, q);
+                     const tf2::Vector3 offsetVect =
+                         tf2::quatRotate(q, tf2::Vector3(0., offset, 0.));
+                     ret.pose.position.x += offsetVect.x();
+                     ret.pose.position.y += offsetVect.y();
+                     ret.pose.position.z += offsetVect.z();
+                     return ret;
+                   };
+
   if (doOffset_) {
     // if offset, offset the path per request.
     // offset message format:
@@ -631,7 +689,7 @@ bool PathServer::updateStep() {
     frontPath_.offset_left.clear();
     // Follow a ease-in -- hold -- ease-out pattern based on
     // odomMark_, odomSet_, odomLift, and odomClear_
-    for (size_t n = 0; n < frontPath_.offset_poses.size(); n++) {
+    for (size_t n = 0; n < frontPath_.poses.size(); n++) {
       double odomAtPoint = odometer_ + getFrenetXDistance(currentInd_, currentInd_ + n);
       float nodeOffset = 0.0;
       if (odomAtPoint < pathOffsetOdomMark_)
@@ -647,6 +705,8 @@ bool PathServer::updateStep() {
       // else: nodeOffset = 0.0
       frontPath_.offset_left.emplace_back(nodeOffset);
     }
+    // std::cout << odometer_ << " " << pathOffsetOdomMark_ << " " << pathOffsetOdomSet_ << " "
+    //           << pathOffsetOdomLift_ << " " << pathOffsetOdomClear_ << "\n";
 
     /*
     // TODO: I doubt this is necessary. The heading change may be minimal.
@@ -665,32 +725,30 @@ bool PathServer::updateStep() {
     }
     */
 
-    std::transform(frontPath_.offset_left.cbegin(), frontPath_.offset_left.cend(),
-                   frontPath_.offset_poses.cbegin(), frontPath_.offset_poses.begin(),
-                   [&](const float& offset, const PoseStamped& pose) {
-                     PoseStamped ret = pose;
-                     // offset pose to its left by offsetArray[i]. Use quaternion of the pose.
-                     tf2::Quaternion q;
-                     tf2::fromMsg(pose.pose.orientation, q);
-                     const tf2::Vector3 offsetVect =
-                         tf2::quatRotate(q, tf2::Vector3(0., offset, 0.));
-                     ret.pose.position.x += offsetVect.x();
-                     ret.pose.position.y += offsetVect.y();
-                     ret.pose.position.z += offsetVect.z();
-                     return ret;
-                   });
     // treat curvature array
     std::transform(frontPath_.offset_left.cbegin(), frontPath_.offset_left.cend(),
                    frontPath_.curvature.cbegin(), frontPath_.curvature.begin(),
                    [](const float& offset, const float& curvature) {
-                     return (fabs(curvature) <= FLT_EPSILON) ? 0. : 1. / (1. / curvature - offset);
+                     return (fabs(curvature) > 1.e-5) ?
+                      1. / (1. / curvature - offset) : curvature;
                    });
+
+    std::transform(frontPath_.offset_left.cbegin(), frontPath_.offset_left.cend(),
+                   frontPath_.offset_poses.cbegin(), frontPath_.offset_poses.begin(),
+                   pose_offset_fcn);
+
     // Reset path offset flag when the offset segment has passed
     if (odometer_ > pathOffsetOdomClear_) {
       doOffset_ = false;
     }
   } else {
-    frontPath_.offset_left.resize(frontPath_.offset_poses.size(), 0.);
+    frontPath_.offset_left.resize(frontPath_.poses.size(), 0.);
+  }
+
+  if (doOffset_ || odometer_ < pathOffsetOdomClear_ + lookBehindDist_){
+    std::transform(rearPath_.offset_left.cbegin(), rearPath_.offset_left.cend(),
+                   rearPath_.offset_poses.cbegin(), rearPath_.offset_poses.begin(),
+                   pose_offset_fcn);
   }
   return true;
 }
