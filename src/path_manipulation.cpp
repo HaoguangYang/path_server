@@ -1,43 +1,38 @@
 #include "path_server/path_server.hpp"
 
-namespace path_server {
-
-void PathServer::offsetPath(const float& from, const float& to, const float& leftingAmount) {
-  // TODO: consider timing delays from header
-  existingOffset_ = getCurrentOffset();
-  doOffset_ = existingOffset_ != 0. || leftingAmount != 0.;
-  pathOffsetOdomMark_ = odometer_;
-  // Limit lateral rate: the lane change is completed in no less than
-  // delta/pathOffsetEaseInRate_ distance ahead, using linear lateral interp.
-  float delta = leftingAmount - existingOffset_;
-  pathOffsetEaseInDist_ = std::fmax(from, std::fabs(delta / pathOffsetEaseInRate_));
-  pathOffsetOdomSet_ = odometer_ + static_cast<double>(pathOffsetEaseInDist_);
-  pathOffsetOdomLift_ = odometer_ + static_cast<double>(std::fmax(pathOffsetEaseInDist_, to));
-  // add a small number to prevent divide by zero
-  pathOffsetOdomClear_ =
-      pathOffsetOdomLift_ + std::fabs(leftingAmount / pathOffsetEaseInRate_) + 0.001;
-  pathOffsetToLeft_ = leftingAmount;
-}
+namespace planning {
 
 void PathServer::appendPoses(std::vector<PoseStamped>& target,
                              const std::vector<PoseStamped>& input) {
   target.insert(target.end(), input.cbegin(), input.cend());
+
+  // TODO: this is problematic.
+  /*
+  std::vector<PoseStamped>* path = &(utmCoords_.poses);
+  try {
+    path = path_utils::firstAvailable(
+        {&(utmCoords_.poses), &(localEnuCoords_.poses), &(mapCoords_.poses), &(odomCoords_.poses)});
+  } catch (std::runtime_error& e) {
+    path = nullptr;
+  }
+
   // re-calculate frenet-frame distances and curvature
-  initFrenetXDistance();
-  initCurvature();
+  initFrenetXDistance(path);
+  initCurvature(path);
+  */
+  initialize(true);
 }
 
 void PathServer::replacePoses(std::vector<PoseStamped>& target,
                               const std::vector<PoseStamped>& input) {
   // re-initialization requires path_frame -> base_link transfomation available.
   target = input;
-  // reset initialization status
-  currentInd_ = -1;
-  initialize();
+  // force re-initialize
+  initialize(true);
 }
 
 // TODO: more path switching approaches.
 // void PathServer::intersectPoses(std::vector<PoseStamped> &target, const std::vector<PoseStamped>
 // &input){}
 
-}  // namespace path_server
+}  // namespace planning

@@ -33,9 +33,9 @@ if(${ROS_VERSION} EQUAL 2)
   ament_auto_add_library(path_server_lib SHARED
     src/bezier_interpolation.cpp
     src/path_manipulation.cpp
-    src/path_server_utils.cpp
     src/path_server.cpp
     src/path_server_node.cpp
+    src/path_data_extd.cpp
   )
 
   # linking GeographicLib as it is added with the custom cmake path
@@ -71,6 +71,7 @@ elseif(${ROS_VERSION} EQUAL 1)
     tf2_ros
     tf2_geometry_msgs
     nav_msgs
+    pluginlib
   )
   find_package(cmake_modules)
   find_package(Eigen REQUIRED)
@@ -84,7 +85,6 @@ elseif(${ROS_VERSION} EQUAL 1)
   add_executable(path_server_node
     src/bezier_interpolation.cpp
     src/path_manipulation.cpp
-    src/path_server_utils.cpp
     src/path_server.cpp
     src/path_server_node_ros1.cpp
   )

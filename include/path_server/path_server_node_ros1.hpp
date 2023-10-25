@@ -8,6 +8,7 @@
 #include "ros/ros.h"
 #include "std_msgs/Bool.h"
 #include "std_msgs/Float32MultiArray.h"
+#include "tf2_ros/transform_listener.h"
 
 using geometry_msgs::Pose;
 using geometry_msgs::PoseStamped;
@@ -15,14 +16,12 @@ using nav_msgs::Path;
 using std_msgs::Bool;
 using std_msgs::Float32MultiArray;
 
-namespace path_server {
+namespace planning {
 class PathServerNode {
  public:
   explicit PathServerNode(ros::NodeHandle* nh);
 
-  ~PathServerNode() {
-    delete pathServer_;
-  };
+  ~PathServerNode() { delete pathServer_; };
 
   /**
    * @brief Register a csv path file with the path server instance.
@@ -47,13 +46,13 @@ class PathServerNode {
   /**
    * @brief path server instances
    */
-  PathServer *pathServer_;
+  PathServer* pathServer_;
 
   std::unique_ptr<ros::Rate> pathPubTimer_;
   double lookAheadDist_, lookBehindDist_, interpStep_;
   bool isClosedPath_, interpretYaw_, doInterp_, doOffset_;
   std::shared_ptr<tf2_ros::TransformListener> tfListener_{nullptr};
-  std::unique_ptr<tf2_ros::Buffer> tfBuffer_;
+  std::shared_ptr<tf2_ros::Buffer> tfBuffer_;
   std::string frontPathTopic_, rearPathTopic_;
 
   /**
@@ -72,6 +71,6 @@ class PathServerNode {
 
 };  // class
 
-}  // namespace path_server
+}  // namespace planning
 
 #endif  // _PATH_SERVER__PATH_SERVER_HPP_

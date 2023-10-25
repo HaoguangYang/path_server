@@ -3,7 +3,7 @@
 #include <chrono>
 #include <ctime>
 
-namespace path_server {
+namespace planning {
 
 PathServerNode::PathServerNode(ros::NodeHandle* nh)
     : node_(nh) {
@@ -42,15 +42,33 @@ PathServerNode::PathServerNode(ros::NodeHandle* nh)
   this->pathCurvaturePub_ =
       node_->advertise<Float32MultiArray>("path_curvature", 10);
 
-  tfBuffer_ = std::make_unique<tf2_ros::Buffer>();
+  tfBuffer_ = std::make_shared<tf2_ros::Buffer>();
   tfListener_ = std::make_shared<tf2_ros::TransformListener>(*tfBuffer_);
   geometry_msgs::TransformStamped t;
+
+  double utmScale = 1.0;
+  /*
+  if (datum_vals.size() >= 2) {
+    double datum_lat = datum_vals[0];
+    double datum_lon = datum_vals[1];
+    int utm_zone_tmp;
+    bool northp_tmp;
+    double utm_e_tmp, utm_n_tmp, gamma_tmp;
+    try {
+      GeographicLib::UTMUPS::Forward(datum_lat, datum_lon, utm_zone_tmp, northp_tmp, utm_e_tmp,
+                                     utm_n_tmp, gamma_tmp, utmScale);
+    } catch (GeographicLib::GeographicErr& ex) {
+      // lat/lon combination is invalid
+    }
+  }
+  */
 
   // assign header frame ids for path representations
   // cast unique_ptr to raw pointer as tfBuffer_ will continue to exist until after pathServer_ gets
   // destroyed.
-  pathServer_ = new PathServer(node_, tfBuffer_.get(), targetFrame, utmFrame, localEnuFrame,
-                               mapFrame, odomFrame, onNewPath);
+  pathServer_ = new PathServer(node_, tfBuffer_.get(), "center", targetFrame, utmFrame, localEnuFrame,
+                               mapFrame, odomFrame, onNewPath, doInterp, interpStep, interpretYaw_,
+                               centerPathPlugins, utmScale);
   pathServer_->setPathAttr(lookAheadDist_, lookBehindDist_, isClosedPath_, doInterp_, interpStep_,
                            interpretYaw_, true);
   while (!initialize(pathServer_, pathFolder_ + pathFileName_, pathFrame_))
@@ -177,7 +195,7 @@ void PathServerNode::pubErrMsg(const std::string& description, const int8_t& lev
   */
 }
 
-}  // namespace path_server
+}  // namespace planning
 
 int main(int argc, char** argv){
   ros::init(argc, argv, "path_server");

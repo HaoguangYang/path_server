@@ -1,7 +1,27 @@
+/**
+ * @file path_server.hpp
+ * @author Haoguang Yang (yang1510@purdue.edu)
+ * @brief The path server class. It manages multi-reference frame switching as a redundancy, path
+ * registration, and periodic updates.
+ * @version 0.1
+ * @date 2023-08-12
+ *
+ * @copyright Copyright (c) 2022-2023 Haoguang Yang
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License. You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software distributed under the License
+ * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+ * or implied. See the License for the specific language governing permissions and limitations under
+ * the License.
+ *
+ */
+
 #ifndef _PATH_SERVER__PATH_SERVER_HPP_
 #define _PATH_SERVER__PATH_SERVER_HPP_
-
-#include <stdarg.h>
 
 #include <chrono>
 #include <deque>
@@ -11,89 +31,149 @@
 #include <memory>
 #include <stdexcept>
 
+#include "GeographicLib/UTMUPS.hpp"
+
+// ROS library and messages
 #if __has_include("rclcpp/rclcpp.hpp")
-#include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
-#include "geometry_msgs/msg/transform_stamped.hpp"
-#include "nav_msgs/msg/path.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/header.hpp"
 #elif __has_include("ros/ros.h")
-#include "geometry_msgs/Pose.h"
 #include "geometry_msgs/PoseStamped.h"
-#include "geometry_msgs/TransformStamped.h"
-#include "nav_msgs/Path.h"
 #include "ros/ros.h"
-#include "std_msgs/Header.h"
 #endif
 
+// In-package functional components
 #include "bezier_interpolation.hpp"
+#include "path_data_extd.hpp"
+#include "path_property.hpp"
+#include "path_utils.hpp"
+#include "logging.hpp"
+
+// TF2 utilities
 #include "tf2/LinearMath/Quaternion.h"
-#include "tf2/buffer_core.h"
 #include "tf2_ros/buffer.h"
-#include "tf2_ros/transform_listener.h"
 #if __has_include("tf2_geometry_msgs/tf2_geometry_msgs.hpp")
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #else
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #endif
 
-#include "GeographicLib/UTMUPS.hpp"
-
 using namespace std::chrono_literals;
 using namespace std::placeholders;
 using namespace Eigen;
+
+namespace planning {
+
 #ifdef RCLCPP__RCLCPP_HPP_
-using geometry_msgs::msg::Pose;
 using geometry_msgs::msg::PoseStamped;
-using nav_msgs::msg::Path;
-using std_msgs::msg::Header;
 #elif defined ROSCPP_ROS_H
-using geometry_msgs::Pose;
 using geometry_msgs::PoseStamped;
-using nav_msgs::Path;
-using std_msgs::Header;
+// TimePointZero already defined in path_utils.hpp
 #endif
 
-#ifdef ROSCPP_ROS_H
-namespace tf2 {
-  typedef ros::Time TimePoint;
-  const ros::Time TimePointZero = ros::Time(0);
-}
-#endif
+// The abstract class as a place-holder.
+class PathServer;
 
-namespace path_server {
+/**
+ * @brief A class that contains multiple path server instances that are contextually related. Their
+ * property configuration and update process are orchistrated.
+ */
+class PeerHandle {
+  /**
+   * @brief The vector and priority of the path server instances that are related.
+   */
+  std::vector<std::pair<PathServer*, uint8_t>> peers_ = {};
+
+  /**
+   * @brief max number of properties within one path server instance. Used to update properties in
+   * an interleaved pattern.
+   */
+  size_t maxNumPropertiesPerPath_ = 0;
+
+ public:
+  /**
+   * @brief Construct a new Peer Handle object, with included peers being called in the order of
+   * their priorities.
+   *
+   * @param peers input vector of pointers to path server instances.
+   * @param prio input vector of the priority of the path server instances. Instances are sorted by
+   * their priorities before storing into the handle. When configuring properties and updating, the
+   * instances are called with descreasing order in their priorities.
+   */
+  PeerHandle(const std::vector<PathServer*>& peers, const std::vector<uint8_t>& prio);
+
+  /**
+   * @brief Construct a new Peer Handle object, with included peers being called in the order of
+   * inclusion. All included instances have the same priority value of 0.
+   *
+   * @param peers input vector of pointers to path server instances.
+   */
+  PeerHandle(const std::vector<PathServer*>& peers);
+
+  /**
+   * @brief Configure properties associated with individual path server instances. The instances
+   * with higher priorities will be configured first.
+   *
+   * @param fastFail Whether to fail and exit at the first occurance of configuration failure.
+   * @return true The configuration of all instances is successful.
+   * @return false At least one instance have failed in the configuration process.
+   */
+  bool configureProperties(const bool& fastFail = true);
+
+  /**
+   * @brief Update all included path server instances at the decreasing order of their priorities
+   * (or inclusion order if they have the same priority).
+   *
+   * @return true All instances updated successfully.
+   * @return false At least one instance have failed to update.
+   */
+  bool update();
+
+  /**
+   * @brief Number of contained peers.
+   *
+   * @return const size_t& size of the peers_ vector.
+   */
+  size_t size() const { return peers_.size(); }
+
+  /**
+   * @brief Indexing method of contained peers
+   *
+   * @param i which peer to index
+   * @return const PathServer* read-only pointer to the contained PathServer instance.
+   */
+  const PathServer* at(const size_t& i) const { return peers_[i].first; }
+};
+
+
+/**
+ * @brief The actual definition of the path server class. A path server manages one instance of path
+ * data, which is initialized from raw coordinates (from a file). Multiple representations of the
+ * path data in different reference frames are generated to mitigate unplanned loss of tf updates,
+ * change of tf configurations, etc. During update, the path server performs fault-tolerant
+ * selection of the closest coordinate in the given path, from a list of candidate frame ids. The
+ * path server then links the result to the managed path data instance accordingly. Finally, the
+ * associated properties of the managed path data will be updated based on configuration order.
+ */
 class PathServer {
  public:
 #ifdef RCLCPP__RCLCPP_HPP_
-  explicit PathServer(rclcpp::Node* node, tf2_ros::Buffer* tfBuffer, const std::string& targetFrame,
-                      const std::string& utmFrame, const std::string& localEnuFrame,
-                      const std::string& mapFrame, const std::string& odomFrame,
-                      const std::string& onNewPath, const double& utmScale = 1.0);
+  typedef rclcpp::Node* NodePtr;
 #elif defined ROSCPP_ROS_H
-  explicit PathServer(ros::NodeHandle* node, tf2_ros::Buffer* tfBuffer,
-                      const std::string& targetFrame, const std::string& utmFrame,
-                      const std::string& localEnuFrame, const std::string& mapFrame,
-                      const std::string& odomFrame, const std::string& onNewPath,
-                      const double& utmScale = 1.0);
+  typedef ros::NodeHandle* NodePtr;
 #endif
 
+  explicit PathServer(NodePtr node, tf2_ros::Buffer* tfBuffer,
+                      const std::string& name, const std::string& targetFrame,
+                      const std::string& utmFrame, const std::string& localEnuFrame,
+                      const std::string& mapFrame, const std::string& odomFrame,
+                      const std::string& onNewPath, const bool& doInterp, const double& interpStep,
+                      const bool& interpretYaw,
+                      const std::vector<std::pair<std::string, std::string>>& plugins,
+                      const double& utmScale = 1.0);
+
   ~PathServer() = default;
-
-  void setPathAttr(const double& lookAheadDist, const double& lookBehindDist,
-                   const bool& isClosedPath, const bool& doInterp, const double& interpStep,
-                   const bool& interpretYaw, const bool& prepareActivePathSeg) {
-    lookAheadDist_ = lookAheadDist;
-    lookBehindDist_ = lookBehindDist;
-    isClosedPath_ = isClosedPath;
-    interpretYaw_ = interpretYaw;
-    doInterp_ = doInterp;
-    interpStep_ = interpStep;
-    prepareActivePathSeg_ = prepareActivePathSeg;
-  };
-
-  void setOffsetRateLimit(const float& rateLim) { pathOffsetEaseInRate_ = rateLim; };
 
   /**
    * @brief convert x_file_, y_file_, yaw_file_ to a static standard frame
@@ -102,7 +182,8 @@ class PathServer {
    * @param pathFrame
    * @param rawPath
    */
-  void registerPath(const std::string& pathFrame, const std::vector<std::vector<double>>& rawPath);
+  void registerPath(const std::string& pathFrame, const std::vector<std::vector<double>>& rawPath,
+                    const bool& isClosedPath, const std::string& pathName = "");
 
   /**
    * @brief find current closest point on the path coordinates,
@@ -111,13 +192,23 @@ class PathServer {
    * @return true
    * @return false
    */
-  bool initialize();
+  bool initialize(const bool& force = false);
 
-  bool updateStep();
+  bool configureProperties();
 
   /**
-   * @brief Sync paths in different static reference frames.
-   * The availability of these frames can change over time.
+   * @brief publish path in target_frame, extracting the segment within [lookBehind, lookAhead]
+   *
+   * @return true
+   * @return false
+   */
+  bool updateIndex();
+
+  bool updateProperty(const size_t& which) { return pathData_.updateProperty(which); }
+
+  /**
+   * @brief Sync paths in different static reference frames. The availability of these frames may
+   * change over time.
    */
 #ifdef RCLCPP__RCLCPP_HPP_
   void updateStaticFrameTfAvail();
@@ -125,216 +216,148 @@ class PathServer {
   void updateStaticFrameTfAvail(const ros::TimerEvent&);
 #endif
 
-  void offsetPath(const float& from, const float& to, const float& leftingAmount);
+  const int& getCurrentInd() const { return pathData_.getCurrentIndex(); }
 
-  void clearOffset() { doOffset_ = false; };
+  const bool& isClosedPath() const { return pathData_.isClosedPath(); }
 
-  Path getFrontPath() const {
-    Path out;
-    out.header = frontPath_.header;
-    out.poses = frontPath_.poses;
-    return out;
-  };
+  const PoseStamped& getClosestWaypoint() const { return pathData_.getClosestWaypoint(); }
 
-  Path getRearPath() const {
-    Path out;
-    out.header = rearPath_.header;
-    out.poses = rearPath_.poses;
-    return out;
-  };
+  const PathData& getPathData() const { return pathData_; }
 
-  Path getFrontOffsetPath() const {
-    Path out;
-    out.header = frontPath_.header;
-    out.poses = frontPath_.offset_poses;
-    return out;
-  };
+  size_t getNumProperties() const { return pathData_.getNumProperties(); }
 
-  Path getRearOffsetPath() const {
-    Path out;
-    out.header = rearPath_.header;
-    out.poses = rearPath_.offset_poses;
-    return out;
-  };
-
-  std::vector<float> getFrontLookAheadArray() const {
-    return frontPath_.look_ahead;
-  }
-
-  std::vector<float> getFrontCurvature() const {
-    return {frontPath_.curvature.cbegin(), frontPath_.curvature.cend()};
-  }
-
-  std::vector<float> getRearCurvature() const {
-    return {rearPath_.curvature.cbegin(), rearPath_.curvature.cend()};
-  }
-
-  std::vector<float> getFrontOffsetArray() const {
-    return {frontPath_.offset_left.cbegin(), frontPath_.offset_left.cend()};
-  }
-
-  std::vector<float> getRearOffsetArray() const {
-    return {rearPath_.offset_left.cbegin(), rearPath_.offset_left.cend()};
-  }
-
-  const float& getCurrentOffset() const { return frontPath_.offset_left.front(); }
-
-  const int& getCurrentInd() const { return currentInd_; };
-
-  const bool& isClosedPath() const { return isClosedPath_; };
-
-  double getPathCumulativeDist() const {
-    return isClosedPath_ ? milestone_.front() : milestone_.back();
-  };
-
-  const PoseStamped& getClosestPose() const { return frontPath_.offset_poses[0]; };
-
-  std::tuple<double, double, double> safeVector(const PoseStamped& pose1,
-                                                const PoseStamped& pose2) const;
-
-  // observe pose2 from pose1
-  Pose safeProjection(const PoseStamped& pose1, const PoseStamped& pose2) const;
+  void setPeers(const std::vector<const PathData*>& peers) { pathData_.setPeers(peers); }
 
   /**
-   * @brief gets distance between two poses with frame_id handling
+   * @brief Set the Peers object: a cluster of paths with the same context and can be updated
+   * together, regardless of order.
    *
-   * @param pose1
-   * @param pose2
-   * @return double
+   * @param peers the pointers to PathServer instances in which the paths of interest are wrapped.
+   * @return PeerHandle periodic update handle.
    */
-  double safeGetDistance(const PoseStamped& pose1, const PoseStamped& pose2) const;
-
-  /**
-   * @brief direction to pose 2 from pose1, measured in pose1 frame.
-   *
-   * @param pose1
-   * @param pose2
-   * @return tf2::Quaternion
-   */
-  tf2::Quaternion safeGetOrientation(const PoseStamped& pose1, const PoseStamped& pose2) const;
-
-  /**
-   * @brief transform path.poses using tf2
-   *
-   * @param outFrame
-   * @param inPoses
-   * @return std::vector<PoseStamped>
-   */
-  std::vector<PoseStamped> safeTransformPoses(const std::string& outFrame,
-                                              const std::vector<PoseStamped>& inPoses) const {
-    std::vector<PoseStamped> outPoses;
-    if (safeCanTransform(outFrame, inPoses[0].header.frame_id, tf2::TimePointZero)) {
-      const auto tf =
-          tfBuffer_->lookupTransform(outFrame, inPoses[0].header.frame_id, tf2::TimePointZero);
-      outPoses.resize(inPoses.size());
-      std::transform(inPoses.cbegin(), inPoses.cend(), outPoses.begin(),
-                     [&](const PoseStamped& data) {
-                       PoseStamped ret;
-                       tf2::doTransform(data, ret, tf);
-                       return ret;
-                     });
+  static PeerHandle setPeers(const std::vector<PathServer*>& peers) {
+    std::vector<const PathData*> pdPeers(peers.size());
+    for (const auto& ps : peers) {
+      pdPeers.emplace_back(&(ps->getPathData()));
     }
-    return outPoses;
+    for (auto& ps : peers) {
+      ps->setPeers(pdPeers);
+    }
+    return PeerHandle(peers);
+  }
+
+  bool setBonds(const std::vector<const PathData*>& peers, const std::vector<uint8_t>& prio) {
+    return pathData_.setBonds(peers, prio);
+  }
+
+  /**
+   * @brief Set the Peers object with priority order, i.e. a Bonds object. The bond is a cluster of
+   * paths with the same context and synchronized contents, and can be updated together with a
+   * leader-follower fashion. The leader in the bond has higher priority and is updated first.
+   *
+   * @param peers the pointers to PathServer instances in which the paths of interest are wrapped.
+   * @param prio the vector of uint8_t describing update priority
+   * @return PeerHandle periodic update handle.
+   */
+  static PeerHandle setBonds(const std::vector<PathServer*>& peers,
+                             const std::vector<uint8_t>& prio) {
+    std::vector<const PathData*> pdPeers{};
+    pdPeers.reserve(peers.size());
+    for (const auto& ps : peers) {
+      pdPeers.emplace_back(&(ps->getPathData()));
+    }
+    bool success = true;
+    for (auto& ps : peers) {
+      success &= ps->setBonds(pdPeers, prio);
+    }
+    if (!success) return PeerHandle({});
+    return PeerHandle(peers, prio);
+  }
+
+  std::vector<bool> getPluginActivationStates() const { return pathData_.getActivationStates(); }
+
+  void setPluginActivationStates(const std::vector<bool>& activation) {
+    RCLCPP_INFO(node_->get_logger(), "Setting plugin activation status for path: %s",
+                pathName_.c_str());
+    pathData_.setActivationStates(activation);
   }
 
  private:
-  typedef struct PathCandidate {
-    const std::string frame_id;
-    unsigned long version;
-    std::vector<PoseStamped> poses;
-
-    PathCandidate(const std::string& frame_id) : frame_id(frame_id) {}
-  } PathCandidate;
-
-  typedef struct SlidingPathWithProperty {
-    Header header;
-    std::vector<PoseStamped> poses;
-    std::vector<float> look_ahead;
-    std::deque<float> curvature;
-    std::deque<float> offset_left;
-    std::vector<PoseStamped> offset_poses;
-  } SlidingPathWithProperty;
-
   /**
-   * @brief directly pack raw vector of poses (from file) into path.poses
+   * @brief directly pack raw vector of poses (from file) into path.poses. It uses a passthrough
+   * method for position and orientation.
    *
-   * @param coords
-   * @param outputFrame
-   * @return template <typename T>
+   * @tparam T input vector data type
+   * @param coords input vector of raw poses without frame information
+   * @param outputFrame desired frame id of the output
+   * @return std::vector<PoseStamped> output vector of poses that can be directly assigned to
+   * nav_msgs::msg::Path.poses
    */
   template <typename T>
   std::vector<PoseStamped> packPathPoses(const std::vector<T>& coords,
-                                         const std::string& outputFrame) {
+                                         const std::string& outputFrame, const bool& isClosedPath) {
     return packPathPoses(
-        coords, outputFrame, [](const T& xp) { return xp; }, [](const auto& xr) { return xr; });
+        coords, outputFrame, isClosedPath, [](const T& xp) { return xp; },
+        [](const auto& xr) { return xr; });
   }
 
   /**
    * @brief pack raw vector of poses (from file) into path.poses with
    * custom transformation functions
    *
-   * @tparam T
-   * @tparam Lambda1
-   * @tparam Lambda2
-   * @param coords
-   * @param outputFrame
-   * @param poseMethod
-   * @param headingMethod
-   * @return std::vector<PoseStamped>
+   * @tparam T input vector data type
+   * @tparam Lambda1 function type for position
+   * @tparam Lambda2 function type for orientation
+   * @param coords raw vector of coordinates
+   * @param outputFrame desired frame id of the output
+   * @param poseMethod position function handle, such that `T transformedPose =
+   * poseMethod(coords[n]);`
+   * @param headingMethod orientation function handle, such that if the third field is valid,
+   * `double heading = headingMethod(coords[n][2]);`
+   * @return std::vector<PoseStamped> output vector of poses that can be directly assigned to
+   * nav_msgs::msg::Path.poses
    */
   template <typename T, typename Lambda1, typename Lambda2>
   std::vector<PoseStamped> packPathPoses(const std::vector<T>& coords,
-                                         const std::string& outputFrame, Lambda1&& poseMethod,
-                                         Lambda2&& headingMethod);
+                                         const std::string& outputFrame, const bool& isClosedPath,
+                                         Lambda1&& poseMethod, Lambda2&& headingMethod);
 
   /**
-   * @brief This method completely rebuilds the path segment.
+   * @brief A path registration method that appends new poses `input` at the end of existing poses
+   * `target`.
    *
-   * @param source
-   * @param indStart
-   * @param indEnd
-   * @return std::vector<T>
-   */
-  template <typename T>
-  std::vector<T> getActiveSeg(const std::vector<T>& source, const int& indStart, const int& indEnd,
-                              const bool& isClosed) const;
-
-  // a power tool to select the first member within a list that has a user-defined property
-  template <typename Lambda, typename T, typename... Args>
-  T findFirstThat(const std::initializer_list<T>& candidates, const Lambda&& method,
-                  const Args&... args) const {
-    for (const auto& item : candidates) {
-      if (method(item, args...)) {
-        return item;
-      }
-    }
-    throw std::runtime_error("None of the provided candidates meet the conditions.");
-  }
-
-  template <typename T>
-  T firstAvailable(const std::initializer_list<T>& candidates) const {
-    return findFirstThat(candidates, [](const T& item) { return (item->size() > 0); });
-  }
-
-  static Path makePath(SlidingPathWithProperty& in) {
-    Path out;
-    out.header = in.header;
-    out.poses = in.poses;
-    return out;
-  }
-
-  /**
-   * @brief A path registration method
-   *
-   * @param target
-   * @param input
+   * @param target existing poses
+   * @param input new poses to be appended
    */
   void appendPoses(std::vector<PoseStamped>& target, const std::vector<PoseStamped>& input);
 
+  /**
+   * @brief A path registration method that replaces existing poses `target` with new poses `input`.
+   *
+   * @param target existing poses
+   * @param input new poses to replace the existing poses with.
+   */
   void replacePoses(std::vector<PoseStamped>& target, const std::vector<PoseStamped>& input);
 
   // void intersectPoses(std::vector<PoseStamped> &target, const std::vector<PoseStamped> &input);
 
+  void syncPathCandidate(const std::initializer_list<PathCandidate>& in, PathCandidate& out);
+
+  /**
+   * @brief This function finds the index on the path that is closest to the current
+   * position. The returned index is in the range of [0, poses.size()]
+   *
+   * @param poses The vector of poses to which the distance from self is calculated
+   * @param startInd  Starting from this index in the provided pose vector
+   * @param stopAtFirstMin  Whether to stop searching when a first minima is found
+   * @param wrapAround  Whether to re-start search from the beginning once reaching the end
+   * @return int  The index of the closest pose.
+   */
+  int findClosestInd(const std::vector<PoseStamped>& poses, const int& startInd,
+                     bool stopAtFirstMin = true, bool wrapAround = false) const;
+
+
+/*
   void syncPathCandidate(const std::initializer_list<PathCandidate>& in, PathCandidate& out) {
     if (out.version >= latestPathVer_) return;
     if (!safeCanTransform(out.frame_id, targetFrame_, tf2::TimePointZero)) return;
@@ -368,95 +391,20 @@ class PathServer {
 #endif
     }
   }
+*/
 
-  /**
-   * @brief initializer for milestone_ vector. Used for frenet frame distance
-   * calculation.
-   */
-  void initFrenetXDistance();
-
-  /**
-   * @brief initializer for curvature_ vector. Used to bake curvature of interpolated paths.
-   */
-  void initCurvature();
-
-  static float mengerCurvature(const PoseStamped& p1, const PoseStamped& p2,
-                               const PoseStamped& p3) {
-    // TODO: handle exception
-    assert(p1.header.frame_id == p2.header.frame_id && p2.header.frame_id == p3.header.frame_id);
-    double TrigA =
-        (p2.pose.position.x - p1.pose.position.x) * (p3.pose.position.y - p1.pose.position.y) -
-        (p2.pose.position.y - p1.pose.position.y) * (p3.pose.position.x - p1.pose.position.x);
-    // left turn has positive curvature
-    return static_cast<float>(
-        4. * TrigA /
-        (1.e-12 + std::sqrt((std::pow(p2.pose.position.x - p1.pose.position.x, 2) +
-                             std::pow(p2.pose.position.y - p1.pose.position.y, 2)) *
-                            (std::pow(p3.pose.position.x - p2.pose.position.x, 2) +
-                             std::pow(p3.pose.position.y - p2.pose.position.y, 2)) *
-                            (std::pow(p3.pose.position.x - p1.pose.position.x, 2) +
-                             std::pow(p3.pose.position.y - p1.pose.position.y, 2)))));
-  };
-
-  /**
-   * @brief Get the Frenet X Distance object.
-   * This function returns the frenet-frame distance between two indices on the
-   * stored path (using milestone_). The distance is directional, from ind1 to ind2.
-   * If the path is closed, this function allows the two numbers to exceed the
-   * size limit of the stored path. The corresponding point is found using modulo.
-   *
-   * @param ind1
-   * @param ind2
-   * @return double
-   */
-  double getFrenetXDistance(const int& ind1, const int& ind2);
-
-  /**
-   * @brief This function finds the index on the path that is closest to the current
-   * position. The returned index is in the range of [0, poses.size()]
-   *
-   * @param poses
-   * @param startInd
-   * @param stopAtFirstMin
-   * @param wrapAround
-   * @return int
-   */
-  int findClosestInd(const std::vector<PoseStamped>& poses, const int& startInd,
-                     bool stopAtFirstMin = true, bool wrapAround = false) const;
-
-  /**
-   * @brief update indices where the path is cut off at front and rear directions.
-   * The resultant indices are different from the current (nearest) path pose index,
-   * unless it is one of the starting or ending poses.
-   * The resultant indices follow path directions when seen at currentInd_, i.e.
-   * if the path is closed, the lookForwardInd_ may exceed path size, and
-   * the lookBehindInd_ may be negative. These indices are unwrapped values.
-   */
-  void updateLookAheadAndBehindInds();
-
-  bool safeCanTransform(const std::string& to, const std::string& from,
-                        const tf2::TimePoint& time = tf2::TimePointZero) const {
-    if (!(this->tfBuffer_->_frameExists(to) && tfBuffer_->_frameExists(from))) return false;
-    return (this->tfBuffer_->canTransform(to, from, time));
-  }
-
-#ifdef RCLCPP__RCLCPP_HPP_
-  rclcpp::Node* node_;
-#elif defined ROSCPP_ROS_H
-  ros::NodeHandle* node_;
-#endif
+  NodePtr node_;
   tf2_ros::Buffer* tfBuffer_;
 
   /**
    * @brief User-specified expression of the raw path and the targeted transformation.
    */
   std::string pathFrame_, targetFrame_;
+  std::string pathName_ = "";
 
   std::string onNewPath_;
-  double lookAheadDist_, lookBehindDist_;
-  bool isClosedPath_, doInterp_;
+  bool doInterp_, interpretYaw_;
   double interpStep_;
-  bool interpretYaw_, prepareActivePathSeg_;
 
   /**
    * @brief static or quasi-static reference frames that we will check.
@@ -474,39 +422,20 @@ class PathServer {
    * base_link: rigidly attached to the robot, facing front (X), left (Y), up (Z).
    */
   PathCandidate utmCoords_, localEnuCoords_, mapCoords_, odomCoords_;
-  bool utmScaled_ = false;
+  unsigned long latestPathVer_ = 0;
   double utmScale_ = 1.0;
 
-  unsigned long latestPathVer_ = 0;
-  std::vector<double> milestone_;
-  std::vector<float> curvature_;
 #ifdef RCLCPP__RCLCPP_HPP_
   rclcpp::TimerBase::SharedPtr staticFrameChkTimer_{nullptr};
 #elif defined ROSCPP_ROS_H
   ros::Timer staticFrameChkTimer_;
 #endif
 
-  int currentInd_ = -1;
-  int lookAheadInd_ = 0;
-  int lookBehindInd_ = 0;
-  int lapCount_ = 0;
-  double odometer_ = 0.0;
-
-  // limit on dist_lateral_travelled/dist_forward_travelled. This controls how abrupt the change is.
-  float pathOffsetEaseInRate_ = 0.1;
-  // offset control points
-  bool doOffset_ = false;
-  float pathOffsetEaseInDist_ = 50.0;
-  double pathOffsetOdomMark_, pathOffsetOdomSet_, pathOffsetOdomLift_, pathOffsetOdomClear_;
-  // offset value when the command is received, and the commanded value. Used to calculate ease-in.
-  float existingOffset_ = 0.0;
-  float pathOffsetToLeft_ = 0.0;
-
-  // output buffer
-  SlidingPathWithProperty frontPath_, rearPath_;
+  // path in the selected reference frame and path property plugins
+  PathDataExtd pathData_;
 
 };  // class
 
-}  // namespace path_server
+}  // namespace planning
 
 #endif  // _PATH_SERVER__PATH_SERVER_HPP_

@@ -1,0 +1,4 @@
+std_msgs/Header header
+float32 offset_y
+float32 effective_from_s
+float32 effective_until_s

@@ -24,6 +24,7 @@
   <depend>nav_msgs</depend>
   <depend>eigen</depend>
   <depend>geographiclib</depend>
+  <depend>pluginlib</depend>
 
   <test_depend condition="$ROS_VERSION == 2">ament_lint_auto</test_depend>
   <test_depend condition="$ROS_VERSION == 2">ament_lint_common</test_depend>
