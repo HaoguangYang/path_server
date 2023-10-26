@@ -30,6 +30,7 @@ if(${ROS_VERSION} EQUAL 2)
   find_package(ament_cmake_auto REQUIRED)
   ament_auto_find_build_dependencies()
 
+  # main program
   ament_auto_add_library(path_server_lib SHARED
     src/bezier_interpolation.cpp
     src/path_manipulation.cpp
@@ -47,6 +48,46 @@ if(${ROS_VERSION} EQUAL 2)
     PLUGIN "path_server::PathServerNode"
     EXECUTABLE path_server_node
   )
+
+  # custom message types
+  rosidl_generate_interfaces(${PROJECT_NAME}
+    "msg/PathOffsetCommand.msg"
+    DEPENDENCIES
+      builtin_interfaces
+      std_msgs
+    ADD_LINTER_TESTS
+  )
+
+  if(NOT COMMAND rosidl_get_typesupport_target)
+    function(rosidl_get_typesupport_target var generate_interfaces_target typesupport_name)
+      if(NOT TARGET ${generate_interfaces_target})
+        message(FATAL_ERROR
+          "${generate_interfaces_target} is not a CMake target. Maybe rosidl_generate_interfaces was given a different target name?")
+      endif()
+
+      set(output_target "${generate_interfaces_target}__${typesupport_name}")
+
+      if(NOT TARGET ${output_target})
+        # CMake if() evaluates strings ending in `-NOTFOUND` as false
+        set(output_target "${output_target}-NOTFOUND")
+      endif()
+
+      set("${var}" "${output_target}" PARENT_SCOPE)
+    endfunction()
+  endif()
+
+  rosidl_get_typesupport_target(cpp_typesupport_target "${PROJECT_NAME}" "rosidl_typesupport_cpp")
+
+  # plugins
+  ament_auto_add_library(path_server_plugins SHARED
+    src/path_properties/active_segment.cpp
+    src/path_properties/curvature.cpp
+    src/path_properties/curve_length.cpp
+    src/path_properties/lateral_offset.cpp
+    src/path_properties/nop.cpp
+  )
+  target_link_libraries(path_server_plugins "${cpp_typesupport_target}")
+  pluginlib_export_plugin_description_file(path_server_overhaul plugins.xml)
 
   # export information to downstream packages
   ament_auto_package(
@@ -87,6 +128,7 @@ elseif(${ROS_VERSION} EQUAL 1)
     src/path_manipulation.cpp
     src/path_server.cpp
     src/path_server_node_ros1.cpp
+    src/path_data_extd.cpp
   )
 
   target_link_libraries(path_server_node ${catkin_LIBRARIES})

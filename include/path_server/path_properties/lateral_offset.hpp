@@ -28,25 +28,25 @@
 #include <deque>
 #include <rclcpp/rclcpp.hpp>
 
-#include "blackandgold_msgs/msg/path_offset_command.hpp"
-#include "path_server_overhaul/path_data.hpp"
-#include "path_server_overhaul/path_properties/active_segment.hpp"
-#include "path_server_overhaul/path_properties/curvature.hpp"
-#include "path_server_overhaul/path_properties/curve_length.hpp"
-#include "path_server_overhaul/path_property.hpp"
-#include "path_server_overhaul/path_utils.hpp"
+#include "path_server/msg/path_offset_command.hpp"
+#include "path_server/path_data.hpp"
+#include "path_server/path_properties/active_segment.hpp"
+#include "path_server/path_properties/curvature.hpp"
+#include "path_server/path_properties/curve_length.hpp"
+#include "path_server/path_property.hpp"
+#include "path_server/path_utils.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 
 namespace planning {
 
-using blackandgold_msgs::msg::PathOffsetCommand;
+using path_server::msg::PathOffsetCommand;
 using geometry_msgs::msg::PoseStamped;
 using std_msgs::msg::Float32MultiArray;
 using namespace path_utils;
 
 class LateralOffset : public PathProperty {
  public:
-  virtual void configure(rclcpp::Node* parent, std::string name,
+  virtual void configure(NodePtr parent, std::string name,
                          std::shared_ptr<tf2_ros::Buffer> tf, PathData* path) override final {
     nh_ = parent;
     name_ = name;
@@ -254,8 +254,8 @@ class LateralOffset : public PathProperty {
       pathOffsetSub_ = nh_->create_subscription<PathOffsetCommand>(
           "path_offset_command", rclcpp::SystemDefaultsQoS(),
           [this](PathOffsetCommand::UniquePtr msg) {
-            this->offsetPath(msg->effective_from_distance, msg->effective_until_distance,
-                             msg->leftwards_offset);
+            this->offsetPath(msg->effective_from_s, msg->effective_until_s,
+                             msg->offset_y);
           });
     }
     active_ = true;
@@ -362,7 +362,7 @@ class LateralOffset : public PathProperty {
     offsetMinPub_->publish(std::move(rbound));
   }
 
-  rclcpp::Node* nh_ = nullptr;
+  NodePtr nh_ = nullptr;
   std::shared_ptr<tf2_ros::Buffer> tf_ = nullptr;
   PathData* pathData_ = nullptr;
   bool asLeader_ = true;

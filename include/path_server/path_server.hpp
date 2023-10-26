@@ -27,7 +27,6 @@
 #include <deque>
 #include <eigen3/Eigen/Core>
 #include <eigen3/Eigen/Dense>
-#include <fstream>
 #include <memory>
 #include <stdexcept>
 
@@ -40,6 +39,7 @@
 #include "rclcpp/rclcpp.hpp"
 #elif __has_include("ros/ros.h")
 #include "geometry_msgs/PoseStamped.h"
+#include "path_server/logging.hpp"
 #include "ros/ros.h"
 #endif
 
@@ -48,7 +48,6 @@
 #include "path_data_extd.hpp"
 #include "path_property.hpp"
 #include "path_utils.hpp"
-#include "logging.hpp"
 
 // TF2 utilities
 #include "tf2/LinearMath/Quaternion.h"
@@ -146,7 +145,6 @@ class PeerHandle {
   const PathServer* at(const size_t& i) const { return peers_[i].first; }
 };
 
-
 /**
  * @brief The actual definition of the path server class. A path server manages one instance of path
  * data, which is initialized from raw coordinates (from a file). Multiple representations of the
@@ -164,12 +162,11 @@ class PathServer {
   typedef ros::NodeHandle* NodePtr;
 #endif
 
-  explicit PathServer(NodePtr node, tf2_ros::Buffer* tfBuffer,
-                      const std::string& name, const std::string& targetFrame,
-                      const std::string& utmFrame, const std::string& localEnuFrame,
-                      const std::string& mapFrame, const std::string& odomFrame,
-                      const std::string& onNewPath, const bool& doInterp, const double& interpStep,
-                      const bool& interpretYaw,
+  explicit PathServer(NodePtr node, tf2_ros::Buffer* tfBuffer, const std::string& name,
+                      const std::string& targetFrame, const std::string& utmFrame,
+                      const std::string& localEnuFrame, const std::string& mapFrame,
+                      const std::string& odomFrame, const std::string& onNewPath,
+                      const bool& doInterp, const double& interpStep, const bool& interpretYaw,
                       const std::vector<std::pair<std::string, std::string>>& plugins,
                       const double& utmScale = 1.0);
 
@@ -356,42 +353,41 @@ class PathServer {
   int findClosestInd(const std::vector<PoseStamped>& poses, const int& startInd,
                      bool stopAtFirstMin = true, bool wrapAround = false) const;
 
-
-/*
-  void syncPathCandidate(const std::initializer_list<PathCandidate>& in, PathCandidate& out) {
-    if (out.version >= latestPathVer_) return;
-    if (!safeCanTransform(out.frame_id, targetFrame_, tf2::TimePointZero)) return;
-    std::vector<PoseStamped> tmpPoses;
-    std::string adoptedFrame;
-    for (const auto& it : in) {
-      if (it.version == latestPathVer_) {
-        tmpPoses = safeTransformPoses(out.frame_id, it.poses);
-        // Handle UTM -> local cartesian scaling (last bit of at most 0.1% error)
-        if (it.frame_id == utmCoords_.frame_id && it.frame_id != out.frame_id){
-          for (auto& p : tmpPoses){
-            p.pose.position.x /= utmScale_;
-            p.pose.position.y /= utmScale_;
+  /*
+    void syncPathCandidate(const std::initializer_list<PathCandidate>& in, PathCandidate& out) {
+      if (out.version >= latestPathVer_) return;
+      if (!safeCanTransform(out.frame_id, targetFrame_, tf2::TimePointZero)) return;
+      std::vector<PoseStamped> tmpPoses;
+      std::string adoptedFrame;
+      for (const auto& it : in) {
+        if (it.version == latestPathVer_) {
+          tmpPoses = safeTransformPoses(out.frame_id, it.poses);
+          // Handle UTM -> local cartesian scaling (last bit of at most 0.1% error)
+          if (it.frame_id == utmCoords_.frame_id && it.frame_id != out.frame_id){
+            for (auto& p : tmpPoses){
+              p.pose.position.x /= utmScale_;
+              p.pose.position.y /= utmScale_;
+            }
           }
+          adoptedFrame = it.frame_id;
         }
-        adoptedFrame = it.frame_id;
+        if (!tmpPoses.size()) continue;
+        break;
       }
-      if (!tmpPoses.size()) continue;
-      break;
+      // got a valid transform
+      if (tmpPoses.size()) {
+        out.poses = tmpPoses;
+        out.version = latestPathVer_;
+  #ifdef RCLCPP_DEBUG
+        RCLCPP_DEBUG(node_->get_logger(), "Synchronized path representation %s from %s.",
+                     out.frame_id.c_str(), adoptedFrame.c_str());
+  #elif defined ROS_DEBUG
+        ROS_DEBUG("Synchronized path representation %s from %s.",
+                     out.frame_id.c_str(), adoptedFrame.c_str());
+  #endif
+      }
     }
-    // got a valid transform
-    if (tmpPoses.size()) {
-      out.poses = tmpPoses;
-      out.version = latestPathVer_;
-#ifdef RCLCPP_DEBUG
-      RCLCPP_DEBUG(node_->get_logger(), "Synchronized path representation %s from %s.",
-                   out.frame_id.c_str(), adoptedFrame.c_str());
-#elif defined ROS_DEBUG
-      ROS_DEBUG("Synchronized path representation %s from %s.",
-                   out.frame_id.c_str(), adoptedFrame.c_str());
-#endif
-    }
-  }
-*/
+  */
 
   NodePtr node_;
   tf2_ros::Buffer* tfBuffer_;

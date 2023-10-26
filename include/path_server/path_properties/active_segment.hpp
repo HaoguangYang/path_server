@@ -26,10 +26,10 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav_msgs/msg/path.hpp"
-#include "path_server_overhaul/path_data.hpp"
-#include "path_server_overhaul/path_properties/curve_length.hpp"
-#include "path_server_overhaul/path_property.hpp"
-#include "path_server_overhaul/path_utils.hpp"
+#include "path_server/path_data.hpp"
+#include "path_server/path_properties/curve_length.hpp"
+#include "path_server/path_property.hpp"
+#include "path_server/path_utils.hpp"
 
 namespace planning {
 
@@ -39,7 +39,7 @@ using namespace path_utils;
 
 class ActiveSegment : public PathProperty {
  public:
-  virtual void configure(rclcpp::Node* parent, std::string name,
+  virtual void configure(NodePtr parent, std::string name,
                          std::shared_ptr<tf2_ros::Buffer> tf, PathData* path) override final {
     nh_ = parent;
     name_ = name;
@@ -214,7 +214,7 @@ class ActiveSegment : public PathProperty {
     rearPathPub_->publish(std::move(rear));
   }
 
-  rclcpp::Node* nh_ = nullptr;
+  NodePtr nh_ = nullptr;
   std::shared_ptr<tf2_ros::Buffer> tf_ = nullptr;
   PathData* pathData_ = nullptr;
   bool asLeader_ = true;

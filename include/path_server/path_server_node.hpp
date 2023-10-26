@@ -27,6 +27,7 @@
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "path_server/path_server.hpp"
+#include "path_server/path_utils.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -63,8 +64,6 @@ class PathServerNode : public rclcpp::Node {
                   const std::string& pathFrame);
 
  private:
-  std::vector<std::vector<double>> readPathFromCsv(const std::string& pathFileName);
-
   void onUpdate();
 
   void pubErrMsg(const std::string& description, const int8_t& level, const int8_t& lifetime);
@@ -87,7 +86,7 @@ class PathServerNode : public rclcpp::Node {
   bool isClosedAltPath_, interpretYaw_;
   std::shared_ptr<tf2_ros::TransformListener> tfListener_{nullptr};
   std::shared_ptr<tf2_ros::Buffer> tfBuffer_;
-  rclcpp::TimerBase::SharedPtr pathPubTimer_{nullptr};
+  rclcpp::TimerBase::SharedPtr updateTimer_{nullptr};
 
   /**
    * @brief the center, left and right paths all support hot-swapping.

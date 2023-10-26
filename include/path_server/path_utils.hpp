@@ -26,6 +26,7 @@
 #include <cassert>
 #include <cmath>
 #include <vector>
+#include <fstream>
 
 #if __has_include("rclcpp/rclcpp.hpp")
 #include "geometry_msgs/msg/pose.hpp"
@@ -34,6 +35,7 @@
 #elif __has_include("ros/ros.h")
 #include "geometry_msgs/Pose.h"
 #include "geometry_msgs/PoseStamped.h"
+#include "path_server/logging.hpp"
 #include "ros/ros.h"
 #endif
 
@@ -46,9 +48,9 @@
 
 #ifdef ROSCPP_ROS_H
 namespace tf2 {
-  typedef ros::Time TimePoint;
-  const ros::Time TimePointZero = ros::Time(0);
-}
+typedef ros::Time TimePoint;
+const ros::Time TimePointZero = ros::Time(0);
+}  // namespace tf2
 #endif
 
 namespace path_utils {
@@ -56,10 +58,52 @@ namespace path_utils {
 #ifdef RCLCPP__RCLCPP_HPP_
 using geometry_msgs::msg::Pose;
 using geometry_msgs::msg::PoseStamped;
+typedef rclcpp::Node* NodePtr;
 #elif defined ROSCPP_ROS_H
-using geometry_msgs::PoseStamped;
 using geometry_msgs::Pose;
+using geometry_msgs::PoseStamped;
+typedef ros::NodeHandle* NodePtr;
 #endif
+
+inline std::vector<std::vector<double>> readMatrixFromCsv(NodePtr node, const std::string& fileName) {
+  std::vector<std::vector<double>> res;
+  std::ifstream csvFile;
+  csvFile.open(fileName.c_str());
+  if (!csvFile.is_open()) {
+    RCLCPP_FATAL(node->get_logger(),
+                 "PROVIDED FILE NAME IS INVALID. THE FUNCTION %s WILL RETURN EMPTY MATRIX.",
+                 __FUNCTION__);
+    return res;
+  }
+  // parse csv file to x_file_, y_file_, yaw_file_ (unprocessed coords)
+  std::string line;
+  int lineN = 0;
+  while (getline(csvFile, line)) {
+    lineN++;
+    if (line.empty())  // skip empty lines:
+      continue;
+    // std::cout << line << std::endl;
+    std::istringstream lineStream(line);
+    std::string field;
+    std::vector<double> row;
+    try {
+      while (getline(lineStream, field, ',')) {
+        row.emplace_back(std::stod(field));  // convert to double
+      }
+      // std::cout << row[0] << ' ' << row[1] << std::endl;
+    } catch (const std::invalid_argument& ia) {
+      // this line has invalid number. Skip.
+      RCLCPP_WARN(node->get_logger(),
+                  "File %s Line %i is invalid (non-csv or non-numeric) and will be skipped.",
+                  fileName.c_str(), lineN);
+      continue;
+    }
+    res.emplace_back(row);
+  }
+  // we are done with the file.
+  csvFile.close();
+  return res;
+}
 
 /**
  * @brief This method extracts the segment [indStart, indEnd] (inclusive) from source. It accounts
@@ -354,10 +398,11 @@ template <typename RetT, typename NodePtrT>
 inline RetT safeDeclareParameter(
     NodePtrT node, const std::string& param_name, const RetT& default_value
 #ifdef RCLCPP__RCLCPP_HPP_
-    , const rcl_interfaces::msg::ParameterDescriptor& parameter_descriptor =
+    ,
+    const rcl_interfaces::msg::ParameterDescriptor& parameter_descriptor =
         rcl_interfaces::msg::ParameterDescriptor()
 #endif
-) noexcept {
+        ) noexcept {
   RetT ret;
 #ifdef RCLCPP__RCLCPP_HPP_
   if (!node->has_parameter(param_name)) {
@@ -379,7 +424,7 @@ inline RetT safeDeclareParameter(
  * @brief This function finds the index on the path that is closest to the current
  * position. The returned index is in the range of [0, poses.size()]
  *
- * @param logger  The node->get_logger() return type to log outputs
+ * @param node  The node->get_logger() needs to return the logger
  * @param tfBuffer  The tf2_ros::Buffer instance
  * @param poses The vector of poses to which the distance from self is calculated
  * @param self  The origin of distance calculation
@@ -388,12 +433,7 @@ inline RetT safeDeclareParameter(
  * @param wrapAround  Whether to re-start search from the beginning once reaching the end
  * @return int  The index of the closest pose.
  */
-#ifdef RCLCPP__RCLCPP_HPP_
-typedef rclcpp::Logger Logger;
-#elif defined ROSCPP_ROS_H
-typedef void* Logger;
-#endif
-inline int findClosestInd(Logger logger, const tf2_ros::Buffer& tfBuffer,
+inline int findClosestInd(NodePtr node, const tf2_ros::Buffer& tfBuffer,
                           const std::vector<PoseStamped>& poses, const PoseStamped& self,
                           const int& startInd, bool stopAtFirstMin, bool wrapAround) {
   int minId = startInd;
@@ -404,7 +444,8 @@ inline int findClosestInd(Logger logger, const tf2_ros::Buffer& tfBuffer,
     double thisDist = path_utils::safeGetDistance(tfBuffer, poses[trialId], self);
     if (thisDist < 0.) {
       // something went wrong.
-      RCLCPP_ERROR(logger, "INITIALIZATION FAILED due to failed to get distance to path poses.");
+      RCLCPP_ERROR(node->get_logger(),
+                   "INITIALIZATION FAILED due to failed to get distance to path poses.");
       return -1;
     } else if (thisDist < minDistance) {
       minDistance = thisDist;
@@ -423,7 +464,8 @@ inline int findClosestInd(Logger logger, const tf2_ros::Buffer& tfBuffer,
     double thisDist = path_utils::safeGetDistance(tfBuffer, poses[trialId], self);
     if (thisDist < 0.) {
       // something went wrong.
-      RCLCPP_ERROR(logger, "INITIALIZATION FAILED due to failed to get distance to path poses.");
+      RCLCPP_ERROR(node->get_logger(),
+                   "INITIALIZATION FAILED due to failed to get distance to path poses.");
       return -1;
     } else if (thisDist < minDistance) {
       minDistance = thisDist;

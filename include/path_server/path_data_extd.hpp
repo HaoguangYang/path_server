@@ -29,7 +29,6 @@
 #include <pluginlib/class_loader.hpp>
 #include <vector>
 
-#include "logging.hpp"
 #if __has_include("rclcpp/rclcpp.hpp")
 #include "geometry_msgs/msg/pose.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -38,6 +37,7 @@
 #include "geometry_msgs/Pose.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "ros/ros.h"
+#include "logging.hpp"
 #endif
 
 #include "tf2_ros/buffer.h"

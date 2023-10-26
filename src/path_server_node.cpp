@@ -227,6 +227,8 @@ PathServerNode::PathServerNode(const rclcpp::NodeOptions& options)
   leftAltBoundaryServer_->setPluginActivationStates(leftPluginStdbyEna);
   rightAltBoundaryServer_->setPluginActivationStates(rightPluginStdbyEna);
 
+  this->onAltPathPub_ = this->create_publisher<Bool>("on_alt_path", rclcpp::SystemDefaultsQoS());
+
   // Now we can update both path server and alternative path server.
   // Test current distance to both paths. If we are closer to alternative path instead,
   // we assume we started on the alternative path.
@@ -268,50 +270,10 @@ PathServerNode::PathServerNode(const rclcpp::NodeOptions& options)
   }
 
   // Setup callbacks
-  pathPubTimer_ = this->create_wall_timer(0.01s, std::bind(&PathServerNode::onUpdate, this));
+  updateTimer_ = this->create_wall_timer(0.01s, std::bind(&PathServerNode::onUpdate, this));
 
   paramCbHandle_ = this->add_on_set_parameters_callback(
       std::bind(&PathServerNode::parametersCallback, this, _1));
-}
-
-std::vector<std::vector<double>> PathServerNode::readPathFromCsv(const std::string& pathFileName) {
-  std::vector<std::vector<double>> res;
-  std::ifstream pathFileCsv;
-  pathFileCsv.open(pathFileName.c_str());
-  if (!pathFileCsv.is_open()) {
-    RCLCPP_FATAL(this->get_logger(),
-                 "PROVIDED PATH FILE NAME IS INVALID. THE NODE WILL NOT OUTPUT ANYTHING.");
-    pubErrMsg("Provided path file name is invalid. The node will not output anything.", 5, 100);
-    return res;
-  }
-  // parse csv file to x_file_, y_file_, yaw_file_ (unprocessed coords)
-  std::string line;
-  int lineN = 0;
-  while (getline(pathFileCsv, line)) {
-    lineN++;
-    if (line.empty())  // skip empty lines:
-      continue;
-    // std::cout << line << std::endl;
-    std::istringstream lineStream(line);
-    std::string field;
-    std::vector<double> row;
-    try {
-      while (getline(lineStream, field, ',')) {
-        row.emplace_back(std::stod(field));  // convert to double
-      }
-      // std::cout << row[0] << ' ' << row[1] << std::endl;
-    } catch (const std::invalid_argument& ia) {
-      // this line has invalid number. Skip.
-      RCLCPP_WARN(this->get_logger(),
-                  "File %s Line %i is invalid (non-csv or non-numeric) and will be skipped.",
-                  pathFileName.c_str(), lineN);
-      continue;
-    }
-    res.emplace_back(row);
-  }
-  // we are done with the file.
-  pathFileCsv.close();
-  return res;
 }
 
 bool PathServerNode::registerPath(PathServer* ps, const std::string& pathFileName,
@@ -319,7 +281,7 @@ bool PathServerNode::registerPath(PathServer* ps, const std::string& pathFileNam
   std::vector<std::vector<double>> rawCoords;
   RCLCPP_INFO(this->get_logger(), "Initializing path %s .", pathFileName.c_str());
   std::clock_t tic = std::clock();
-  rawCoords = readPathFromCsv(pathFileName);
+  rawCoords = path_utils::readMatrixFromCsv(this, pathFileName);
   // handle error
   if (!rawCoords.size()) {
     RCLCPP_FATAL(this->get_logger(),
@@ -416,7 +378,7 @@ rcl_interfaces::msg::SetParametersResult PathServerNode::parametersCallback(
     } else if (param_name == "center_path.standby_profile.file_name") {
       std::string newPath = param.as_string();
       if (newPath != altPathFileName_) {
-        standbyPath_ = readPathFromCsv(newPath);
+        standbyPath_ = path_utils::readMatrixFromCsv(this, newPath);
         if (!standbyPath_.size()) {
           result.successful = false;
           result.reason += "Failed to load path file " + newPath + " . ";
@@ -442,7 +404,7 @@ rcl_interfaces::msg::SetParametersResult PathServerNode::parametersCallback(
     } else if (param_name == "left_bound.standby_profile.file_name") {
       std::string newLeftBound = param.as_string();
       if (newLeftBound != leftAltBoundFileName_) {
-        standbyLeftBound_ = readPathFromCsv(newLeftBound);
+        standbyLeftBound_ = path_utils::readMatrixFromCsv(this, newLeftBound);
         if (!standbyLeftBound_.size()) {
           result.successful = false;
           result.reason += "Failed to load path file " + newLeftBound + " . ";
@@ -468,7 +430,7 @@ rcl_interfaces::msg::SetParametersResult PathServerNode::parametersCallback(
     } else if (param_name == "right_bound.standby_profile.file_name") {
       std::string newRightBound = param.as_string();
       if (newRightBound != rightAltBoundFileName_) {
-        standbyRightBound_ = readPathFromCsv(newRightBound);
+        standbyRightBound_ = path_utils::readMatrixFromCsv(this, newRightBound);
         if (!standbyRightBound_.size()) {
           result.successful = false;
           result.reason += "Failed to load path file " + newRightBound + " . ";

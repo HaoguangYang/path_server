@@ -454,13 +454,8 @@ int PathServer::findClosestInd(const std::vector<PoseStamped>& poses, const int&
     ret.pose.orientation.w = 1.0;
     return ret;
   }();
-#ifdef RCLCPP__RCLCPP_HPP_
-  return path_utils::findClosestInd(node_->get_logger(), *tfBuffer_, poses, self, startInd, stopAtFirstMin,
+  return path_utils::findClosestInd(node_, *tfBuffer_, poses, self, startInd, stopAtFirstMin,
                                     wrapAround);
-#elif defined ROSCPP_ROS_H
-  return path_utils::findClosestInd(nullptr, *tfBuffer_, poses, self, startInd, stopAtFirstMin,
-                                    wrapAround);
-#endif
 }
 
 /*

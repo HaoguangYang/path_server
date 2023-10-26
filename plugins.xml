@@ -1,0 +1,17 @@
+<library path="path_server_plugins">
+    <class  type="planning::NOP" base_class_type="planning::PathProperty">
+        <description>No operation. As its name suggests, this plugin does nothing and returns a constant success. It can be used as a spacer in interleaved property updates, to resolve dependencies between path properties across different bonded paths.</description>
+    </class>
+    <class type="planning::ActiveSegment" base_class_type="planning::PathProperty">
+        <description>Plugin to evaluate path segment near the current robot pose, up to specified look-ahead and look-behind distances.</description>
+    </class>
+    <class type="planning::Curvature" base_class_type="planning::PathProperty">
+        <description>Plugin to evaluate curvature of both the global path and the active segment near the robot.</description>
+    </class>
+    <class type="planning::CurveLength" base_class_type="planning::PathProperty">
+        <description>Plugin to evaluate length of the path and keeps a record of odometry (along the path) in Frenet frame.</description>
+    </class>
+    <class type="planning::LateralOffset" base_class_type="planning::PathProperty">
+        <description>Plugin to manipulate the path by offsetting it in normal directions, at a distance determined by user input.</description>
+    </class>
+</library>

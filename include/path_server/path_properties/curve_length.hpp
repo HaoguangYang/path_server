@@ -24,9 +24,9 @@
 #ifndef PATH_PROPERTY_CURVE_LENGTH_HPP
 #define PATH_PROPERTY_CURVE_LENGTH_HPP
 
-#include "path_server_overhaul/path_data.hpp"
-#include "path_server_overhaul/path_property.hpp"
-#include "path_server_overhaul/path_utils.hpp"
+#include "path_server/path_data.hpp"
+#include "path_server/path_property.hpp"
+#include "path_server/path_utils.hpp"
 
 namespace planning {
 
@@ -35,7 +35,7 @@ using namespace path_utils;
 
 class CurveLength : public PathProperty {
  public:
-  virtual void configure(rclcpp::Node* parent, std::string name,
+  virtual void configure(NodePtr parent, std::string name,
                          std::shared_ptr<tf2_ros::Buffer> tf, PathData* path) override final {
     nh_ = parent;
     name_ = name;
@@ -175,7 +175,7 @@ class CurveLength : public PathProperty {
     if (milestone_[0] < 0.) milestone_.clear();
   }
 
-  rclcpp::Node* nh_ = nullptr;
+  NodePtr nh_ = nullptr;
   std::shared_ptr<tf2_ros::Buffer> tf_ = nullptr;
   PathData* pathData_ = nullptr;
   std::vector<double> milestone_{};

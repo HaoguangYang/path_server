@@ -22,8 +22,8 @@
 #ifndef PATH_PROPERTY_NOP_HPP
 #define PATH_PROPERTY_NOP_HPP
 
-#include "path_server_overhaul/path_property.hpp"
-#include "path_server_overhaul/path_data.hpp"
+#include "path_server/path_property.hpp"
+#include "path_server/path_data.hpp"
 
 namespace planning {
 

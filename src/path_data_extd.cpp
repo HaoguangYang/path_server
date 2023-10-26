@@ -146,7 +146,7 @@ bool PathDataExtd::setBonds(const std::vector<const PathData*>& bonds,
     size_t n = 0;
     // initially, perform a global search to align the start of the leaderPath.
     int ourInd =
-        path_utils::findClosestInd(node_->get_logger(), *tfBuffer_, globalPath_->poses,
+        path_utils::findClosestInd(node_, *tfBuffer_, globalPath_->poses,
                                    leaderPath->poses[n], 0, false, globalPath_->isClosedPath);
     int frontInd = ourInd;
     int rearInd = ourInd;
@@ -182,14 +182,19 @@ bool PathDataExtd::setBonds(const std::vector<const PathData*>& bonds,
       n++;
       if (n >= leaderPath->size()) break;
       // since we have the starting point, now we only perfrom localized searches.
-      ourInd = path_utils::findClosestInd(node_->get_logger(), *tfBuffer_, globalPath_->poses,
+      ourInd = path_utils::findClosestInd(node_, *tfBuffer_, globalPath_->poses,
                                           leaderPath->poses[n], rearInd, true,
                                           globalPath_->isClosedPath);
       frontInd = ourInd;
       rearInd = ourInd;
     }
     globalPath_->poses = syncedPoses;
+#ifdef RCLCPP__RCLCPP_HPP_
     globalPath_->version = static_cast<unsigned long>(node_->now().nanoseconds());
+#elif defined ROSCPP_ROS_H
+    auto now = ros::Time::now();
+    globalPath_->version = static_cast<unsigned long>(now.sec * 1000000000UL + now.nsec);
+#endif  
   } else {
     leaderPath_ = this;
   }
