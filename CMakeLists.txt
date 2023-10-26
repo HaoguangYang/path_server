@@ -113,12 +113,26 @@ elseif(${ROS_VERSION} EQUAL 1)
     tf2_geometry_msgs
     nav_msgs
     pluginlib
+    std_msgs
+    message_generation
   )
   find_package(cmake_modules)
   find_package(Eigen REQUIRED)
 
+  # custom msgs
+  add_message_files(
+    FILES
+    PathOffsetCommand.msg
+  )
+  generate_messages(
+    DEPENDENCIES
+    std_msgs
+  )
+
   ## Declare a catkin package
-  catkin_package()
+  catkin_package(
+    CATKIN_DEPENDS message_runtime
+  )
 
   ## Build talker and listener
   include_directories(include ${catkin_INCLUDE_DIRS} ${Eigen_INCLUDE_DIRS})
@@ -140,6 +154,15 @@ elseif(${ROS_VERSION} EQUAL 1)
 
   add_dependencies(path_server_node
     ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS}
+  )
+
+  # plugins
+  add_library(path_server_plugins
+    #src/path_properties/active_segment.cpp
+    #src/path_properties/curvature.cpp
+    #src/path_properties/curve_length.cpp
+    #src/path_properties/lateral_offset.cpp
+    src/path_properties/nop.cpp
   )
 
 endif()

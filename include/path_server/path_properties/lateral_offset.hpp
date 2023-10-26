@@ -28,20 +28,33 @@
 #include <deque>
 #include <rclcpp/rclcpp.hpp>
 
-#include "path_server/msg/path_offset_command.hpp"
 #include "path_server/path_data.hpp"
 #include "path_server/path_properties/active_segment.hpp"
 #include "path_server/path_properties/curvature.hpp"
 #include "path_server/path_properties/curve_length.hpp"
 #include "path_server/path_property.hpp"
 #include "path_server/path_utils.hpp"
+
+#ifdef RCLCPP__RCLCPP_HPP_
+#include "path_server/msg/path_offset_command.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
+#elif defined ROSCPP_ROS_H
+#include "path_server/PathOffsetCommand.h"
+#include "std_msgs/Float32MultiArray.h"
+#endif
 
 namespace planning {
 
+#ifdef RCLCPP__RCLCPP_HPP_
 using path_server::msg::PathOffsetCommand;
 using geometry_msgs::msg::PoseStamped;
 using std_msgs::msg::Float32MultiArray;
+#elif defined ROSCPP_ROS_H
+using path_server::PathOffsetCommand;
+using geometry_msgs::PoseStamped;
+using std_msgs::Float32MultiArray;
+#endif
+
 using namespace path_utils;
 
 class LateralOffset : public PathProperty {
@@ -387,16 +400,17 @@ class LateralOffset : public PathProperty {
   std::deque<float> frontOffset_{0.}, rearOffset_{0.};
   std::vector<float> offsetLeftBound_{0.}, offsetRightBound_{0.};
 
-  rclcpp::Publisher<Path>::SharedPtr frontOffsetPathPub_, rearOffsetPathPub_;
-  rclcpp::Publisher<Float32MultiArray>::SharedPtr frontOffsetValPub_, rearOffsetValPub_;
-  // Front offset boundaries -- the "boundary array" implementation
-  rclcpp::Publisher<Float32MultiArray>::SharedPtr offsetMaxPub_, offsetMinPub_;
   std::string frontOffsetPathTopic_, rearOffsetPathTopic_, frontOffsetArrayTopic_,
       rearOffsetArrayTopic_, offsetMaxTopic_, offsetMinTopic_;
 
   ActiveSegment* activeSegProperty_;
   CurveLength* curveLength_;
   Curvature* curvature_;
+
+  rclcpp::Publisher<Path>::SharedPtr frontOffsetPathPub_, rearOffsetPathPub_;
+  rclcpp::Publisher<Float32MultiArray>::SharedPtr frontOffsetValPub_, rearOffsetValPub_;
+  // Front offset boundaries -- the "boundary array" implementation
+  rclcpp::Publisher<Float32MultiArray>::SharedPtr offsetMaxPub_, offsetMinPub_;
 
   rclcpp::Subscription<PathOffsetCommand>::SharedPtr pathOffsetSub_ = nullptr;
 };

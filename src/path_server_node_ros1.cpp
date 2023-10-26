@@ -46,30 +46,30 @@ PathServerNode::PathServerNode(ros::NodeHandle* nh) : node_(nh) {
   if (pathFolder_.length() && pathFolder_.back() != '/') pathFolder_ += "/";
 
   // load path names and closure properties
-  node_->getParam("center_path.active_profile.file_name", activePathFileName_);
+  node_->getParam("center_path/active_profile/file_name", activePathFileName_);
   // Active path -- the properties are set up front, no need for a class variable.
-  bool isClosedActivePath = node_->param<bool>("center_path.active_profile.is_closed_path", true);
+  bool isClosedActivePath = node_->param<bool>("center_path/active_profile/is_closed_path", true);
   leftBoundFileName_ =
-      node_->param<std::string>("left_bound.active_profile.file_name", activePathFileName_);
+      node_->param<std::string>("left_bound/active_profile/file_name", activePathFileName_);
   rightBoundFileName_ =
-      node_->param<std::string>("right_bound.active_profile.file_name", activePathFileName_);
+      node_->param<std::string>("right_bound/active_profile/file_name", activePathFileName_);
 
   altPathFileName_ =
-      node_->param<std::string>("center_path.standby_profile.file_name", activePathFileName_);
-  isClosedAltPath_ = node_->param<bool>("center_path.standby_profile.is_closed_path", true);
+      node_->param<std::string>("center_path/standby_profile/file_name", activePathFileName_);
+  isClosedAltPath_ = node_->param<bool>("center_path/standby_profile/is_closed_path", true);
   leftAltBoundFileName_ =
-      node_->param<std::string>("left_bound.standby_profile.file_name", leftBoundFileName_);
+      node_->param<std::string>("left_bound/standby_profile/file_name", leftBoundFileName_);
   rightAltBoundFileName_ =
-      node_->param<std::string>("right_bound.standby_profile.file_name", rightBoundFileName_);
+      node_->param<std::string>("right_bound/standby_profile/file_name", rightBoundFileName_);
 
   tfBuffer_ = std::make_shared<tf2_ros::Buffer>();
   tfListener_ = std::make_shared<tf2_ros::TransformListener>(*tfBuffer_);
 
   // Pitting parameters
   pathSwitchLateralThresh_ =
-      node_->param<double>("path_switching_sensitivity.lateral_difference_meters", 0.5);
+      node_->param<double>("path_switching_sensitivity/lateral_difference_meters", 0.5);
   pathSwitchHeadingThresh_ =
-      node_->param<double>("path_switching_sensitivity.heading_difference_radians", 0.2);
+      node_->param<double>("path_switching_sensitivity/heading_difference_radians", 0.2);
 
   // prepare UTM scaling factor
   std::vector<double> datum_vals{};
@@ -107,30 +107,30 @@ PathServerNode::PathServerNode(ros::NodeHandle* nh) : node_(nh) {
   centerPluginStdbyEna.reserve(centerPathPluginNames.size());
   for (const auto& name : centerPathPluginNames) {
     std::string pluginName;
-    node_->getParam(name + ".plugin", pluginName);
+    node_->getParam(name + "/plugin", pluginName);
     centerPathPlugins.emplace_back(name, pluginName);
-    centerPluginActiveEna.emplace_back(node_->param<bool>(name + ".enabled_when_active", true));
-    centerPluginStdbyEna.emplace_back(node_->param<bool>(name + ".enabled_when_standby", false));
+    centerPluginActiveEna.emplace_back(node_->param<bool>(name + "/enabled_when_active", true));
+    centerPluginStdbyEna.emplace_back(node_->param<bool>(name + "/enabled_when_standby", false));
   }
   leftBoundPlugins.reserve(leftBoundPluginNames.size());
   leftPluginActiveEna.reserve(leftBoundPluginNames.size());
   leftPluginStdbyEna.reserve(leftBoundPluginNames.size());
   for (const auto& name : leftBoundPluginNames) {
     std::string pluginName;
-    node_->getParam(name + ".plugin", pluginName);
+    node_->getParam(name + "/plugin", pluginName);
     leftBoundPlugins.emplace_back(name, pluginName);
-    leftPluginActiveEna.emplace_back(node_->param<bool>(name + ".enabled_when_active", true));
-    leftPluginStdbyEna.emplace_back(node_->param<bool>(name + ".enabled_when_standby", false));
+    leftPluginActiveEna.emplace_back(node_->param<bool>(name + "/enabled_when_active", true));
+    leftPluginStdbyEna.emplace_back(node_->param<bool>(name + "/enabled_when_standby", false));
   }
   rightBoundPlugins.reserve(rightBoundPluginNames.size());
   rightPluginActiveEna.reserve(rightBoundPluginNames.size());
   rightPluginStdbyEna.reserve(rightBoundPluginNames.size());
   for (const auto& name : rightBoundPluginNames) {
     std::string pluginName;
-    node_->getParam(name + ".plugin", pluginName);
+    node_->getParam(name + "/plugin", pluginName);
     rightBoundPlugins.emplace_back(name, pluginName);
-    rightPluginActiveEna.emplace_back(node_->param<bool>(name + ".enabled_when_active", true));
-    rightPluginStdbyEna.emplace_back(node_->param<bool>(name + ".enabled_when_standby", false));
+    rightPluginActiveEna.emplace_back(node_->param<bool>(name + "/enabled_when_active", true));
+    rightPluginStdbyEna.emplace_back(node_->param<bool>(name + "/enabled_when_standby", false));
   }
 
   // assign header frame ids for path representations
